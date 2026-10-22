@@ -245,7 +245,7 @@ class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorke
     override suspend fun doWork(): Result {
         Repository.init(applicationContext)
         val ids = WidgetUpdater.allIds(applicationContext)
-        val weatherDesigns = ids.mapNotNull { Repository.designForWidget(it) }
+        val weatherDesigns = ids.toList().mapNotNull { Repository.designForWidget(it) }
             .filter { it.kind == WidgetKind.WEATHER && it.city.isNotBlank() }
             .distinctBy { "%.2f,%.2f".format(java.util.Locale.US, it.lat, it.lon) }
         weatherDesigns.forEach { d ->
