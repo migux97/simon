@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="simon_bg">#FFFBF7FF</color>
+    <color name="simon_primary">#FF6C4CF5</color>
+    <color name="simon_accent">#FFFF6FA8</color>
+    <color name="launcher_bg">#FF6C4CF5</color>
+</resources>

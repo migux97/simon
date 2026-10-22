@@ -1,0 +1,110 @@
+package com.migux97.simon.ui
+
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Wallpaper
+import androidx.compose.material.icons.filled.Widgets
+import androidx.compose.material3.Icon
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavHostController
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
+import com.migux97.simon.ui.screens.HomeScreen
+import com.migux97.simon.ui.screens.IconEditorScreen
+import com.migux97.simon.ui.screens.IconsScreen
+import com.migux97.simon.ui.screens.LiveDetailScreen
+import com.migux97.simon.ui.screens.MineScreen
+import com.migux97.simon.ui.screens.StaticDetailScreen
+import com.migux97.simon.ui.screens.ThemeDetailScreen
+import com.migux97.simon.ui.screens.WallpapersScreen
+import com.migux97.simon.ui.screens.WidgetEditorScreen
+import com.migux97.simon.ui.screens.WidgetsScreen
+
+private data class Tab(val route: String, val label: String, val icon: ImageVector)
+
+private val tabs = listOf(
+    Tab("home", "Inicio", Icons.Filled.AutoAwesome),
+    Tab("widgets", "Widgets", Icons.Filled.Widgets),
+    Tab("wallpapers", "Fondos", Icons.Filled.Wallpaper),
+    Tab("icons", "Íconos", Icons.Filled.Apps),
+    Tab("mine", "Mío", Icons.Filled.Person)
+)
+
+/** Acciones de navegación que comparten las pantallas. */
+class Nav(private val nav: NavHostController) {
+    fun back() = nav.popBackStack()
+    fun editor(designId: String) = nav.navigate("editor/$designId")
+    fun live(id: String) = nav.navigate("live/$id")
+    fun static(id: String) = nav.navigate("static/$id")
+    fun theme(id: String) = nav.navigate("theme/$id")
+    fun iconsWithTheme(themeId: String) = nav.navigate("iconsTheme/$themeId")
+    fun iconEditor(pkg: String, themeId: String? = null) = nav.navigate("iconedit/$pkg?theme=${themeId ?: ""}")
+    fun tab(route: String) = nav.navigate(route) {
+        popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+        launchSingleTop = true
+        restoreState = true
+    }
+}
+
+@Composable
+fun SimonRoot(editDesignId: String?, onEditConsumed: () -> Unit) {
+    val navController = rememberNavController()
+    val nav = Nav(navController)
+    val backStack by navController.currentBackStackEntryAsState()
+    val current = backStack?.destination?.route
+    val showBar = tabs.any { it.route == current }
+
+    LaunchedEffect(editDesignId) {
+        if (editDesignId != null) {
+            nav.editor(editDesignId)
+            onEditConsumed()
+        }
+    }
+
+    Scaffold(
+        bottomBar = {
+            if (showBar) {
+                NavigationBar {
+                    tabs.forEach { tab ->
+                        NavigationBarItem(
+                            selected = current == tab.route,
+                            onClick = { nav.tab(tab.route) },
+                            icon = { Icon(tab.icon, contentDescription = tab.label) },
+                            label = { Text(tab.label) }
+                        )
+                    }
+                }
+            }
+        }
+    ) { padding ->
+        NavHost(navController, startDestination = "home", modifier = Modifier.padding(padding)) {
+            composable("home") { HomeScreen(nav) }
+            composable("widgets") { WidgetsScreen(nav) }
+            composable("wallpapers") { WallpapersScreen(nav) }
+            composable("icons") { IconsScreen(nav, themeId = null) }
+            composable("mine") { MineScreen(nav) }
+            composable("iconsTheme/{id}") { IconsScreen(nav, themeId = it.arguments?.getString("id")) }
+            composable("editor/{id}") { WidgetEditorScreen(nav, it.arguments?.getString("id") ?: "") }
+            composable("live/{id}") { LiveDetailScreen(nav, it.arguments?.getString("id") ?: "") }
+            composable("static/{id}") { StaticDetailScreen(nav, it.arguments?.getString("id") ?: "") }
+            composable("theme/{id}") { ThemeDetailScreen(nav, it.arguments?.getString("id") ?: "") }
+            composable("iconedit/{pkg}?theme={theme}") {
+                IconEditorScreen(nav, it.arguments?.getString("pkg") ?: "", it.arguments?.getString("theme")?.takeIf { t -> t.isNotBlank() })
+            }
+        }
+    }
+}

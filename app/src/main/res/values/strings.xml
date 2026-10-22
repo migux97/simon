@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Simón</string>
+    <string name="widget_small">Simón · Pequeño</string>
+    <string name="widget_medium">Simón · Mediano</string>
+    <string name="widget_large">Simón · Grande</string>
+    <string name="widget_description">Widgets personalizables de Simón</string>
+    <string name="live_wallpaper_name">Simón · Fondo animado</string>
+    <string name="live_wallpaper_description">Fondos animados creados en Simón</string>
+    <string name="widget_empty">Tocá para elegir un diseño</string>
+</resources>
