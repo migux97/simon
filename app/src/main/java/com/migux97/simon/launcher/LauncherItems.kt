@@ -1,5 +1,6 @@
 package com.migux97.simon.launcher
 
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import android.graphics.Bitmap
 import android.widget.FrameLayout
 import android.widget.VideoView
@@ -319,7 +320,7 @@ private fun ItemContent(item: HomeItem, settings: LauncherSettings, ui: Launcher
             }
             StickerSource.LIBRARY -> StudioStore.sticker(item.mediaId)?.let { info ->
                 androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
-                    androidx.compose.ui.graphics.drawscope.drawIntoCanvas {
+                    drawIntoCanvas {
                         com.migux97.simon.custom.StickerPainter.draw(it.nativeCanvas, info, android.graphics.RectF(0f, 0f, size.width, size.height))
                     }
                 }
