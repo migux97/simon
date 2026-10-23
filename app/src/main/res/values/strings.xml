@@ -8,4 +8,8 @@
     <string name="live_wallpaper_name">Simón · Fondo animado</string>
     <string name="live_wallpaper_description">Fondos animados creados en Simón</string>
     <string name="widget_empty">Tocá para elegir un diseño</string>
+    <string name="launcher_name">Simón Launcher</string>
+    <string name="listener_name">Simón · Efectos de notificación</string>
+    <string name="accessibility_name">Simón · Panel y gestos</string>
+    <string name="accessibility_description">Simón usa este servicio solo para mostrar su panel deslizable propio, bloquear la pantalla con un gesto, sacar capturas desde el panel y mostrar animaciones sobre la pantalla de bloqueo. No lee ni guarda el contenido de tu pantalla.</string>
 </resources>

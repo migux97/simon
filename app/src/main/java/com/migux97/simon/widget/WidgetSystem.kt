@@ -93,7 +93,8 @@ object WidgetUpdater {
         val mgr = AppWidgetManager.getInstance(context)
         allIds(context).forEach { id ->
             val kind = Repository.designForWidget(id)?.kind
-            if (onlyKinds == null || (kind != null && kind in onlyKinds)) update(context, mgr, id)
+            val custom = Repository.bindingFor(id)?.startsWith(CUSTOM_PREFIX) == true
+            if (onlyKinds == null || custom || (kind != null && kind in onlyKinds)) update(context, mgr, id)
         }
     }
 
@@ -125,6 +126,14 @@ object WidgetUpdater {
     }
 
     fun update(context: Context, mgr: AppWidgetManager, id: Int) {
+        val binding = Repository.bindingFor(id)
+        if (binding != null && binding.startsWith(CUSTOM_PREFIX)) {
+            val cw = com.migux97.simon.data.StudioStore.widget(binding.removePrefix(CUSTOM_PREFIX))
+            if (cw != null) {
+                updateCustom(context, mgr, id, cw)
+                return
+            }
+        }
         val design = Repository.designForWidget(id)
         val views = RemoteViews(context.packageName, R.layout.widget_root)
         if (design == null) {
@@ -164,7 +173,67 @@ object WidgetUpdater {
     // ---- Reloj: refresco cada minuto mientras haya widgets de hora ----
 
     private fun hasClockWidgets(context: Context): Boolean =
-        allIds(context).any { Repository.designForWidget(it)?.kind?.needsMinuteTick == true }
+        allIds(context).any {
+            Repository.designForWidget(it)?.kind?.needsMinuteTick == true ||
+                Repository.bindingFor(it)?.startsWith(CUSTOM_PREFIX) == true
+        }
+
+    const val CUSTOM_PREFIX = "cw:"
+
+    /** Widget creado en el constructor, dibujado como imagen en la pantalla de inicio del sistema. */
+    private fun updateCustom(context: Context, mgr: AppWidgetManager, id: Int, cw: com.migux97.simon.data.CustomWidget) {
+        val views = RemoteViews(context.packageName, R.layout.widget_root)
+        val dm = context.resources.displayMetrics
+        val opts = mgr.getAppWidgetOptions(id)
+        var wDp = opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH).takeIf { it > 0 } ?: 250
+        var hDp = (wDp / cw.aspect).toInt()
+        val maxH = opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT)
+        if (maxH in 1 until hDp) { hDp = maxH; wDp = (hDp * cw.aspect).toInt() }
+        var w = wDp * dm.density
+        var h = hDp * dm.density
+        val scale = 1000f / kotlin.math.max(w, h)
+        if (scale < 1f) { w *= scale; h *= scale }
+        val bmp = try {
+            com.migux97.simon.custom.CustomWidgetRenderer.render(context, cw, w.toInt(), h.toInt(), RenderEnv.current(context))
+        } catch (e: Throwable) {
+            null
+        }
+        views.setViewVisibility(R.id.widget_empty, View.GONE)
+        views.setViewVisibility(R.id.widget_image, View.VISIBLE)
+        if (bmp != null) views.setImageViewBitmap(R.id.widget_image, bmp)
+        val intent = Intent(context, ActionReceiver::class.java)
+            .setAction(ActionReceiver.ACTION_RUN)
+            .putExtra(ActionReceiver.EXTRA_ACTION, cw.action.name)
+            .putExtra(ActionReceiver.EXTRA_DATA, cw.actionData)
+            .putExtra(ActionReceiver.EXTRA_WIDGET, cw.id)
+        views.setOnClickPendingIntent(
+            R.id.widget_root,
+            PendingIntent.getBroadcast(context, id, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        )
+        mgr.updateAppWidget(id, views)
+    }
+
+    /** Fija un widget creado en la pantalla de inicio del sistema. */
+    fun requestPinCustom(context: Context, cw: com.migux97.simon.data.CustomWidget): Boolean {
+        val mgr = AppWidgetManager.getInstance(context)
+        if (!mgr.isRequestPinAppWidgetSupported) return false
+        val size = when {
+            cw.aspect >= 1.6f -> WidgetSize.MEDIUM
+            cw.aspect <= 0.8f -> WidgetSize.LARGE
+            else -> WidgetSize.SMALL
+        }
+        val callback = Intent(context, WidgetPinReceiver::class.java).putExtra(EXTRA_DESIGN, CUSTOM_PREFIX + cw.id)
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pi = PendingIntent.getBroadcast(context, cw.id.hashCode(), callback, flags)
+        return mgr.requestPinAppWidget(ComponentName(context, providerFor(size)), null, pi)
+    }
+
+    /** Redibuja los widgets del sistema que muestran un widget creado. */
+    fun updateCustomWidget(context: Context, widgetId: String) {
+        val mgr = AppWidgetManager.getInstance(context)
+        Repository.bindings.value.filterValues { it == CUSTOM_PREFIX + widgetId }.keys.forEach { update(context, mgr, it) }
+    }
 
     fun scheduleTick(context: Context) {
         val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
@@ -217,7 +286,35 @@ class WidgetPinReceiver : BroadcastReceiver() {
         Repository.bindWidget(id, designId)
         WidgetUpdater.update(context, AppWidgetManager.getInstance(context), id)
         WidgetUpdater.scheduleTick(context)
-        if (Repository.design(designId)?.kind == WidgetKind.WEATHER) RefreshWorker.runNow(context)
+        if (designId.startsWith(WidgetUpdater.CUSTOM_PREFIX) || Repository.design(designId)?.kind == WidgetKind.WEATHER) RefreshWorker.runNow(context)
+    }
+}
+
+/** Ejecuta la acción de un widget creado al tocarlo en la pantalla de inicio del sistema. */
+class ActionReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        Repository.init(context)
+        val action = try {
+            com.migux97.simon.data.TapAction.valueOf(intent.getStringExtra(EXTRA_ACTION) ?: "OPEN_SIMON")
+        } catch (e: Exception) {
+            com.migux97.simon.data.TapAction.OPEN_SIMON
+        }
+        val data = intent.getStringExtra(EXTRA_DATA) ?: ""
+        if (action == com.migux97.simon.data.TapAction.OPEN_SIMON) {
+            val open = Intent(context, MainActivity::class.java)
+                .putExtra(MainActivity.EXTRA_ROUTE, "builder/" + (intent.getStringExtra(EXTRA_WIDGET) ?: "new"))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(open)
+        } else {
+            com.migux97.simon.launcher.SystemActions.run(context, action, data)
+        }
+    }
+
+    companion object {
+        const val ACTION_RUN = "com.migux97.simon.RUN_ACTION"
+        const val EXTRA_ACTION = "action"
+        const val EXTRA_DATA = "data"
+        const val EXTRA_WIDGET = "widget"
     }
 }
 
@@ -235,6 +332,8 @@ class SystemEventsReceiver : BroadcastReceiver() {
         WidgetUpdater.updateAll(context)
         WidgetUpdater.scheduleTick(context)
         RefreshWorker.schedule(context)
+        com.migux97.simon.tools.RoutineAlarms.scheduleAll(context)
+        com.migux97.simon.tools.WallpaperRotator.schedule(context)
     }
 }
 
@@ -245,13 +344,15 @@ class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorke
     override suspend fun doWork(): Result {
         Repository.init(applicationContext)
         val ids = WidgetUpdater.allIds(applicationContext)
-        val weatherDesigns = ids.toList().mapNotNull { Repository.designForWidget(it) }
+        // Ciudades de los widgets de clima en pantalla y de los widgets creados.
+        val places = ids.toList().mapNotNull { Repository.designForWidget(it) }
             .filter { it.kind == WidgetKind.WEATHER && it.city.isNotBlank() }
-            .distinctBy { "%.2f,%.2f".format(java.util.Locale.US, it.lat, it.lon) }
-        weatherDesigns.forEach { d ->
-            val cached = Repository.weatherFor(d.lat, d.lon)
+            .map { it.lat to it.lon } +
+            com.migux97.simon.data.StudioStore.widgetsFlow.value.filter { it.city.isNotBlank() }.map { it.lat to it.lon }
+        places.distinctBy { "%.2f,%.2f".format(java.util.Locale.US, it.first, it.second) }.forEach { (lat, lon) ->
+            val cached = Repository.weatherFor(lat, lon)
             val fresh = cached != null && System.currentTimeMillis() - cached.fetchedAt < TimeUnit.MINUTES.toMillis(25)
-            if (!fresh) WeatherService.fetch(d.lat, d.lon)?.let { Repository.putWeather(d.lat, d.lon, it) }
+            if (!fresh) WeatherService.fetch(lat, lon)?.let { Repository.putWeather(lat, lon, it) }
         }
         WidgetUpdater.updateAll(applicationContext)
         WidgetUpdater.scheduleTick(applicationContext)

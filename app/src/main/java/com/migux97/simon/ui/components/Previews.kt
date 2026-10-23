@@ -108,16 +108,15 @@ fun WidgetOnBackdrop(design: WidgetDesign, modifier: Modifier = Modifier, paddin
 fun ScenePreview(config: LiveConfig, modifier: Modifier = Modifier, animate: Boolean = true) {
     val scene = remember(config) { Scene.create(config) }
     var frame by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(scene, animate) {
+    val active = LocalAnimationsActive.current
+    LaunchedEffect(scene, animate, active) {
+        if (!animate || !active) return@LaunchedEffect
         var last = 0L
-        if (!animate) return@LaunchedEffect
-        while (isActive) {
-            withFrameNanos { now ->
-                val dt = if (last == 0L) 0f else (now - last) / 1_000_000_000f
-                last = now
-                scene.step(dt)
-                frame = now
-            }
+        frameLoop { t ->
+            val dt = if (last == 0L) 0f else (t - last) / 1000f
+            last = t
+            scene.step(dt)
+            frame = t
         }
     }
     Canvas(modifier) {

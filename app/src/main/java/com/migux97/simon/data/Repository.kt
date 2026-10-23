@@ -64,6 +64,8 @@ object Repository {
     private var initialized = false
 
     fun init(context: Context) {
+        StudioStore.init(context)
+        MediaLibrary.init(context)
         if (initialized) return
         synchronized(this) {
             if (initialized) return
@@ -79,6 +81,13 @@ object Repository {
             weather = read(KEY_WEATHER) ?: emptyMap()
             initialized = true
         }
+    }
+
+    /** Vuelve a leer todo del disco (después de importar una copia). */
+    fun reload(context: Context) {
+        synchronized(this) { initialized = false }
+        init(context)
+        StudioStore.reload(context)
     }
 
     private inline fun <reified T> read(key: String): T? {
@@ -117,6 +126,9 @@ object Repository {
     // ---- Vinculación widget en pantalla -> diseño ----
 
     fun designForWidget(appWidgetId: Int): WidgetDesign? = design(_bindings.value[appWidgetId])
+
+    /** Valor guardado para un widget en pantalla: id de diseño, o "cw:<id>" si es un widget creado. */
+    fun bindingFor(appWidgetId: Int): String? = _bindings.value[appWidgetId]
 
     fun widgetsUsingDesign(designId: String): List<Int> =
         _bindings.value.filterValues { it == designId }.keys.toList()

@@ -2,7 +2,7 @@ package com.migux97.simon.ui
 
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Wallpaper
@@ -23,7 +23,25 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.migux97.simon.draw.AnimationScreen
+import com.migux97.simon.draw.DrawingScreen
+import com.migux97.simon.ui.screens.BuilderScreen
+import com.migux97.simon.ui.screens.CreateScreen
+import com.migux97.simon.ui.screens.EffectsScreen
 import com.migux97.simon.ui.screens.HomeScreen
+import com.migux97.simon.ui.screens.LauncherSettingsScreen
+import com.migux97.simon.ui.screens.OverlayScreen
+import com.migux97.simon.ui.screens.PerformanceScreen
+import com.migux97.simon.ui.screens.ToolsHubScreen
+import com.migux97.simon.ui.screens.RoutinesScreen
+import com.migux97.simon.ui.screens.RoutineEditorScreen
+import com.migux97.simon.ui.screens.RotationScreen
+import com.migux97.simon.ui.screens.ChargingSettingsScreen
+import com.migux97.simon.ui.screens.LockSettingsScreen
+import com.migux97.simon.ui.screens.EdgeSettingsScreen
+import com.migux97.simon.ui.screens.BubbleSettingsScreen
+import com.migux97.simon.ui.screens.SoundsScreen
+import com.migux97.simon.ui.screens.BackupScreen
 import com.migux97.simon.ui.screens.IconEditorScreen
 import com.migux97.simon.ui.screens.IconsScreen
 import com.migux97.simon.ui.screens.LiveDetailScreen
@@ -40,13 +58,14 @@ private val tabs = listOf(
     Tab("home", "Inicio", Icons.Filled.AutoAwesome),
     Tab("widgets", "Widgets", Icons.Filled.Widgets),
     Tab("wallpapers", "Fondos", Icons.Filled.Wallpaper),
-    Tab("icons", "Íconos", Icons.Filled.Apps),
+    Tab("create", "Crear", Icons.Filled.Brush),
     Tab("mine", "Mío", Icons.Filled.Person)
 )
 
 /** Acciones de navegación que comparten las pantallas. */
 class Nav(private val nav: NavHostController) {
     fun back() = nav.popBackStack()
+    fun go(route: String) = nav.navigate(route)
     fun editor(designId: String) = nav.navigate("editor/$designId")
     fun live(id: String) = nav.navigate("live/$id")
     fun static(id: String) = nav.navigate("static/$id")
@@ -61,16 +80,19 @@ class Nav(private val nav: NavHostController) {
 }
 
 @Composable
-fun SimonRoot(editDesignId: String?, onEditConsumed: () -> Unit) {
+fun SimonRoot(editDesignId: String?, route: String?, onEditConsumed: () -> Unit) {
     val navController = rememberNavController()
     val nav = Nav(navController)
     val backStack by navController.currentBackStackEntryAsState()
     val current = backStack?.destination?.route
     val showBar = tabs.any { it.route == current }
 
-    LaunchedEffect(editDesignId) {
+    LaunchedEffect(editDesignId, route) {
         if (editDesignId != null) {
             nav.editor(editDesignId)
+            onEditConsumed()
+        } else if (route != null) {
+            nav.go(route)
             onEditConsumed()
         }
     }
@@ -96,6 +118,24 @@ fun SimonRoot(editDesignId: String?, onEditConsumed: () -> Unit) {
             composable("widgets") { WidgetsScreen(nav) }
             composable("wallpapers") { WallpapersScreen(nav) }
             composable("icons") { IconsScreen(nav, themeId = null) }
+            composable("create") { CreateScreen(nav) }
+            composable("builder/{id}") { BuilderScreen(nav, it.arguments?.getString("id") ?: "new") }
+            composable("drawing/{id}") { DrawingScreen(nav, it.arguments?.getString("id") ?: "new") }
+            composable("animation/{id}") { AnimationScreen(nav, it.arguments?.getString("id") ?: "new") }
+            composable("effects") { EffectsScreen(nav) }
+            composable("launcherSettings") { LauncherSettingsScreen(nav) }
+            composable("overlay") { OverlayScreen(nav) }
+            composable("performance") { PerformanceScreen(nav) }
+            composable("tools") { ToolsHubScreen(nav) }
+            composable("routines") { RoutinesScreen(nav) }
+            composable("routine/{id}") { RoutineEditorScreen(nav, it.arguments?.getString("id") ?: "new") }
+            composable("rotation") { RotationScreen(nav) }
+            composable("charging") { ChargingSettingsScreen(nav) }
+            composable("lockscreen") { LockSettingsScreen(nav) }
+            composable("edge") { EdgeSettingsScreen(nav) }
+            composable("bubble") { BubbleSettingsScreen(nav) }
+            composable("sounds") { SoundsScreen(nav) }
+            composable("backup") { BackupScreen(nav) }
             composable("mine") { MineScreen(nav) }
             composable("iconsTheme/{id}") { IconsScreen(nav, themeId = it.arguments?.getString("id")) }
             composable("editor/{id}") { WidgetEditorScreen(nav, it.arguments?.getString("id") ?: "") }

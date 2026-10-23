@@ -15,15 +15,21 @@ import com.migux97.simon.ui.theme.SimonTheme
 class MainActivity : ComponentActivity() {
 
     private var editDesign by mutableStateOf<String?>(null)
+    private var route by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Repository.init(this)
         enableEdgeToEdge()
         editDesign = intent?.getStringExtra(EXTRA_EDIT_DESIGN)
+        route = intent?.getStringExtra(EXTRA_ROUTE)
         setContent {
             SimonTheme {
-                SimonRoot(editDesign) { editDesign = null }
+                androidx.compose.runtime.CompositionLocalProvider(
+                    com.migux97.simon.ui.components.LocalAnimationsActive provides com.migux97.simon.ui.components.rememberAnimationsAllowed()
+                ) {
+                    SimonRoot(editDesign, route) { editDesign = null; route = null }
+                }
             }
         }
     }
@@ -31,9 +37,11 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         intent.getStringExtra(EXTRA_EDIT_DESIGN)?.let { editDesign = it }
+        intent.getStringExtra(EXTRA_ROUTE)?.let { route = it }
     }
 
     companion object {
         const val EXTRA_EDIT_DESIGN = "edit_design"
+        const val EXTRA_ROUTE = "route"
     }
 }

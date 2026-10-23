@@ -1,9 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.SET_WALLPAPER" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission
+        android:name="android.permission.WRITE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+    <!-- Un launcher necesita ver todas las apps instaladas y sus widgets -->
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
 
     <uses-feature
         android:name="android.software.live_wallpaper"
@@ -17,6 +36,12 @@
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="org.adw.launcher.THEMES" />
+        </intent>
+        <intent>
+            <action android:name="com.novalauncher.THEME" />
         </intent>
     </queries>
 
@@ -38,6 +63,37 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".launcher.LauncherActivity"
+            android:exported="false"
+            android:label="@string/launcher_name"
+            android:launchMode="singleTask"
+            android:clearTaskOnLaunch="true"
+            android:stateNotNeeded="true"
+            android:resumeWhilePausing="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Simon.Launcher"
+            android:windowSoftInputMode="adjustPan"
+            android:configChanges="keyboard|keyboardHidden|navigation|screenSize|smallestScreenSize|screenLayout|orientation|uiMode" />
+
+        <!--
+            Simón solo aparece como launcher si el usuario activa el modo launcher.
+            Mientras tanto este alias está apagado y el teléfono sigue con su launcher original.
+        -->
+        <activity-alias
+            android:name=".launcher.HomeAlias"
+            android:enabled="false"
+            android:exported="true"
+            android:label="@string/launcher_name"
+            android:targetActivity=".launcher.LauncherActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity-alias>
 
         <activity
             android:name=".widget.WidgetConfigureActivity"
@@ -94,6 +150,10 @@
             android:exported="false" />
 
         <receiver
+            android:name=".widget.ActionReceiver"
+            android:exported="false" />
+
+        <receiver
             android:name=".widget.SystemEventsReceiver"
             android:exported="true">
             <intent-filter>
@@ -104,6 +164,41 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+
+        <activity
+            android:name=".tools.ChargingActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.migux97.simon.charging"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:theme="@style/Theme.Simon.Fullscreen" />
+
+        <activity
+            android:name=".tools.LockActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.migux97.simon.lock"
+            android:showWhenLocked="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:theme="@style/Theme.Simon.Fullscreen" />
+
+        <receiver
+            android:name=".tools.RoutineAlarmReceiver"
+            android:exported="false" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <service
             android:name=".wallpaper.SimonWallpaperService"
@@ -116,6 +211,29 @@
             <meta-data
                 android:name="android.service.wallpaper"
                 android:resource="@xml/wallpaper" />
+        </service>
+
+        <service
+            android:name=".effects.SimonNotificationListener"
+            android:exported="true"
+            android:label="@string/listener_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".effects.SimonAccessibilityService"
+            android:exported="true"
+            android:label="@string/accessibility_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_config" />
         </service>
 
     </application>

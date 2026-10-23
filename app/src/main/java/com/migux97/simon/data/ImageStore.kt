@@ -91,6 +91,11 @@ object ImageStore {
         return bmp
     }
 
+    /** Olvida las versiones en caché de un archivo que cambió. */
+    fun evict(path: String) {
+        cache.snapshot().keys.filter { it.startsWith("$path@") }.forEach { cache.remove(it) }
+    }
+
     fun delete(path: String?) {
         if (path.isNullOrBlank()) return
         File(path).delete()

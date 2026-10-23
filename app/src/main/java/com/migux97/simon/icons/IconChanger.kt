@@ -116,6 +116,7 @@ object IconChanger {
             }
         }
         c.restore()
+        if (style.stickers.isNotEmpty()) com.migux97.simon.custom.StickerPainter.drawAttached(c, style.stickers, s, s)
         return bmp
     }
 

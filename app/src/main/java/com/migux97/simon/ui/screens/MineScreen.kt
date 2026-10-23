@@ -163,6 +163,9 @@ fun MineScreen(nav: Nav) {
         }
 
         item(span = { GridItemSpan(maxLineSpan) }) {
+            androidx.compose.material3.OutlinedButton(onClick = { nav.go("performance") }, modifier = Modifier.padding(top = 16.dp)) { Text("Rendimiento y batería") }
+        }
+        item(span = { GridItemSpan(maxLineSpan) }) {
             Text(
                 "Simón 1.0 · Clima por Open-Meteo",
                 style = MaterialTheme.typography.bodySmall,

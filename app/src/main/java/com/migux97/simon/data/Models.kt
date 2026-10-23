@@ -93,7 +93,8 @@ data class WidgetDesign(
     val use24h: Boolean = true,
     val city: String = "",
     val lat: Double = 0.0,
-    val lon: Double = 0.0
+    val lon: Double = 0.0,
+    val stickers: List<StickerAttach> = emptyList()
 )
 
 @Serializable
@@ -110,7 +111,8 @@ enum class SceneType(val label: String) {
     HEARTS("Corazones"),
     MATRIX("Código"),
     NEON_GRID("Neón retro"),
-    VIDEO("Mi video")
+    VIDEO("Mi video"),
+    USER_ANIMATION("Mi animación")
 }
 
 /** Configuración del fondo animado activo. */
@@ -125,6 +127,7 @@ data class LiveConfig(
     val speed: Float = 1f,
     val density: Float = 1f,
     val videoPath: String? = null,
+    val animationId: String? = null,
     val showClock: Boolean = false,
     val clockColor: Int = 0xFFFFFFFF.toInt(),
     val clockFont: FontStyle = FontStyle.LIGHT
@@ -179,7 +182,8 @@ data class IconStyle(
     val bg2: Int,
     val foreground: IconForeground = IconForeground.TINTED,
     val fgColor: Int = 0xFFFFFFFF.toInt(),
-    val font: FontStyle = FontStyle.SANS_BOLD
+    val font: FontStyle = FontStyle.SANS_BOLD,
+    val stickers: List<StickerAttach> = emptyList()
 )
 
 /** Un acceso directo que el usuario creó con un ícono personalizado. */

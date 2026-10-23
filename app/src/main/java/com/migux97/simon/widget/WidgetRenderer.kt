@@ -98,6 +98,7 @@ object WidgetRenderer {
             val inset = border.strokeWidth / 2
             canvas.drawRoundRect(RectF(inset, inset, w - inset, h - inset), radius, radius, border)
         }
+        if (d.stickers.isNotEmpty()) com.migux97.simon.custom.StickerPainter.drawAttached(canvas, d.stickers, w, h)
     }
 
     // ------------------------------------------------------------------ fondo

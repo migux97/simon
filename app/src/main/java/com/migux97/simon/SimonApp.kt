@@ -11,5 +11,7 @@ class SimonApp : Application() {
         Repository.init(this)
         RefreshWorker.schedule(this)
         WidgetUpdater.scheduleTick(this)
+        com.migux97.simon.tools.RoutineAlarms.scheduleAll(this)
+        com.migux97.simon.tools.WallpaperRotator.schedule(this)
     }
 }

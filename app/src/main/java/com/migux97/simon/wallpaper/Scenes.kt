@@ -92,6 +92,7 @@ abstract class Scene(val config: LiveConfig) {
             SceneType.MATRIX -> MatrixScene(config)
             SceneType.NEON_GRID -> NeonGridScene(config)
             SceneType.VIDEO -> FlowScene(config)
+            SceneType.USER_ANIMATION -> UserAnimationScene(config)
         }
     }
 }
@@ -632,5 +633,32 @@ private class NeonGridScene(cfg: LiveConfig) : Scene(cfg) {
         val glow = Paint().apply { shader = LinearGradient(0f, horizon - h * 0.04f, 0f, horizon + h * 0.04f, Color.TRANSPARENT, Draw.withAlpha(config.color3, 0), Shader.TileMode.CLAMP) }
         glow.shader = LinearGradient(0f, horizon - h * 0.03f, 0f, horizon + h * 0.01f, Color.TRANSPARENT, Draw.withAlpha(config.color2, 140), Shader.TileMode.MIRROR)
         canvas.drawRect(0f, horizon - h * 0.03f, w, horizon + h * 0.01f, glow)
+    }
+}
+
+// ------------------------------------------------------------ animación propia
+
+private class UserAnimationScene(cfg: LiveConfig) : Scene(cfg) {
+    private var frames: List<android.graphics.Bitmap> = emptyList()
+    private val bg = Paint()
+    private val p = Paint(Paint.FILTER_BITMAP_FLAG)
+    private val dst = RectF()
+
+    override fun setup() {
+        bg.color = config.color1
+        frames = com.migux97.simon.data.MediaLibrary.loadFrames(config.animationId, max(w, h).toInt().coerceAtMost(1400))
+    }
+
+    override fun update(dt: Float) = Unit
+
+    override fun draw(canvas: Canvas) {
+        canvas.drawRect(0f, 0f, w, h, bg)
+        val info = com.migux97.simon.data.StudioStore.animation(config.animationId)
+        val f = frames.getOrNull(com.migux97.simon.data.MediaLibrary.frameIndex(info, frames.size, (t * 1000).toLong())) ?: return
+        // Llena la pantalla manteniendo la proporción (recorta los bordes que sobren).
+        val scale = max(w / f.width, h / f.height)
+        val dw = f.width * scale; val dh = f.height * scale
+        dst.set((w - dw) / 2, (h - dh) / 2, (w + dw) / 2, (h + dh) / 2)
+        canvas.drawBitmap(f, null, dst, p)
     }
 }

@@ -34,7 +34,13 @@ class SimonWallpaperService : WallpaperService() {
             override fun run() = drawFrame()
         }
 
-        private fun currentConfig(): LiveConfig = Repository.live.value ?: Catalog.liveWallpapers.first()
+        private fun currentConfig(): LiveConfig {
+            // Fondo animado distinto de día y de noche, si está configurado.
+            val r = com.migux97.simon.data.StudioStore.rotationSettings
+            val scheduled = if (com.migux97.simon.tools.WallpaperRotator.isNight(r)) r.liveNight else r.liveDay
+            scheduled?.let { id -> com.migux97.simon.data.Lookup.live(id)?.let { return it } }
+            return Repository.live.value ?: Catalog.liveWallpapers.first()
+        }
 
         private fun isVideo(c: LiveConfig) = c.scene == SceneType.VIDEO && c.videoPath != null && File(c.videoPath).exists()
 
@@ -124,7 +130,11 @@ class SimonWallpaperService : WallpaperService() {
                 }
             }
             val spent = SystemClock.uptimeMillis() - now
-            schedule((33 - spent).coerceAtLeast(4))
+            val perf = com.migux97.simon.data.StudioStore.perf
+            // En ahorro de batería el fondo queda quieto (se redibuja cada 2 s para el reloj).
+            val frameMs = if (perf.batterySaverPause && com.migux97.simon.ui.components.isPowerSave(this@SimonWallpaperService)) 2000L
+            else 1000L / perf.maxFps.coerceIn(10, 60)
+            schedule((frameMs - spent).coerceAtLeast(4))
         }
 
         private fun startVideo(c: LiveConfig) {

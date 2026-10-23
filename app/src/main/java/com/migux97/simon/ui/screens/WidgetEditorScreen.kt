@@ -199,7 +199,7 @@ fun WidgetEditorScreen(nav: Nav, designId: String) {
             }
         }
         ScrollableTabRow(selectedTabIndex = tab, edgePadding = 12.dp, containerColor = MaterialTheme.colorScheme.background) {
-            listOf("Estilo", "Contenido", "Fondo", "Texto", "Detalles").forEachIndexed { i, t ->
+            listOf("Estilo", "Contenido", "Fondo", "Texto", "Stickers", "Detalles").forEachIndexed { i, t ->
                 Tab(selected = tab == i, onClick = { tab = i }, text = { Text(t) })
             }
         }
@@ -214,7 +214,8 @@ fun WidgetEditorScreen(nav: Nav, designId: String) {
                 1 -> ContentTab(d, onChange = { d = it }, pickPhoto = ::pickPhoto, onWeather = { refresh++ })
                 2 -> BackgroundTab(d, onChange = { d = it }, pickPhoto = { pickPhoto(PhotoTarget.BACKGROUND) })
                 3 -> TextTab(d) { d = it }
-                4 -> DetailsTab(d) { d = it }
+                4 -> com.migux97.simon.ui.components.StickerAttachEditor(d.stickers) { d = d.copy(stickers = it) }
+                5 -> DetailsTab(d) { d = it }
             }
         }
         Surface(tonalElevation = 3.dp) {

@@ -59,6 +59,7 @@ import com.migux97.simon.ui.theme.SimonGradient
 @Composable
 fun HomeScreen(nav: Nav) {
     val applied by Repository.appliedTheme.collectAsStateWithLifecycle()
+    val mode by com.migux97.simon.data.StudioStore.modeFlow.collectAsStateWithLifecycle()
     val popular = remember {
         Catalog.widgetTemplates.filter { it.size != WidgetSize.LARGE }.filterIndexed { i, _ -> i % 4 == 0 }.take(12)
     }
@@ -85,9 +86,45 @@ fun HomeScreen(nav: Nav) {
             ) {
                 QuickAction("Widgets", Icons.Filled.Widgets, Color(0xFF8B6CFF), Modifier.weight(1f)) { nav.tab("widgets") }
                 QuickAction("Fondos", Icons.Filled.Wallpaper, Color(0xFF1FA2FF), Modifier.weight(1f)) { nav.tab("wallpapers") }
-                QuickAction("Íconos", Icons.Filled.Apps, Color(0xFFFF7E5F), Modifier.weight(1f)) { nav.tab("icons") }
-                QuickAction("Mío", Icons.Filled.Brush, Color(0xFFFF4F81), Modifier.weight(1f)) { nav.tab("mine") }
+                QuickAction("Íconos", Icons.Filled.Apps, Color(0xFFFF7E5F), Modifier.weight(1f)) { nav.go("icons") }
+                QuickAction("Efectos", Icons.Filled.Brush, Color(0xFFFF4F81), Modifier.weight(1f)) { nav.go("effects") }
             }
+        }
+        item {
+            Text(
+                "Todo esto funciona con el launcher que ya tenés.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp)
+            )
+        }
+        item {
+            ModeCard(
+                title = "Capa sobre tu launcher",
+                text = "Stickers, widgets animados y dibujos flotando sobre tu pantalla de inicio de siempre, sin reemplazarla y sin bloquear los toques.",
+                action = if (mode.overlayEnabled) "Activa · Editar →" else "Probar →",
+                brush = Brush.linearGradient(listOf(Color(0xFFFF7E5F), Color(0xFFFF4F81))),
+                onClick = { nav.go("overlay") }
+            )
+        }
+        item {
+            ModeCard(
+                title = if (mode.launcherEnabled) "Simón Launcher · activado" else "Simón Launcher (opcional)",
+                text = if (mode.launcherEnabled) "Tu pantalla de inicio sin límites: íconos y widgets donde quieras, superpuestos, con movimiento y gestos."
+                else "Solo si querés reemplazar tu pantalla de inicio. Si no lo activás, Simón ni siquiera aparece como launcher y no consume nada.",
+                action = if (mode.launcherEnabled) "Configurar →" else "Ver qué ofrece →",
+                brush = SimonGradient,
+                onClick = { nav.go("launcherSettings") }
+            )
+        }
+        item {
+            ModeCard(
+                title = "Más funciones",
+                text = "Rutinas automáticas, fondos que cambian solos, pantalla de carga y de bloqueo, barra lateral, burbuja flotante, sonidos por app y copias para compartir tu tema.",
+                action = "Abrir →",
+                brush = Brush.linearGradient(listOf(Color(0xFF1FA2FF), Color(0xFF12D8FA))),
+                onClick = { nav.go("tools") }
+            )
         }
         item { SectionHeader("Temas completos") }
         item {
@@ -219,5 +256,22 @@ fun ThemeCard(theme: ThemePack, applied: Boolean, modifier: Modifier = Modifier.
             }
             if (applied) GradientBadge("Aplicado", SimonGradient, Modifier.align(Alignment.TopEnd).padding(10.dp))
         }
+    }
+}
+
+@Composable
+private fun ModeCard(title: String, text: String, action: String, brush: Brush, onClick: () -> Unit) {
+    Column(
+        Modifier
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(26.dp))
+            .background(brush)
+            .clickable(onClick = onClick)
+            .padding(20.dp)
+    ) {
+        Text(title, color = Color.White, style = MaterialTheme.typography.titleLarge)
+        Text(text, color = Color.White.copy(alpha = 0.9f), style = MaterialTheme.typography.bodyMedium)
+        Text(action, color = Color.White, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp))
     }
 }

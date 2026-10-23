@@ -127,16 +127,12 @@ fun IconsScreen(nav: Nav, themeId: String?) {
     val filtered = remember(apps, query) { apps?.filter { query.isBlank() || it.label.contains(query, ignoreCase = true) } ?: emptyList() }
 
     Column(Modifier.fillMaxSize()) {
-        if (themeId != null) {
-            BackTopBar("Íconos del tema", onBack = { nav.back() })
-        } else Column(
-            Modifier
-                .statusBarsPadding()
-                .padding(horizontal = 20.dp, vertical = 12.dp)
-        ) {
-            Text("Íconos", style = MaterialTheme.typography.headlineLarge)
-            Text("Creá accesos directos con íconos a tu gusto", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        BackTopBar(if (themeId != null) "Íconos del tema" else "Íconos", onBack = { nav.back() })
+        Text(
+            "Crea accesos directos con ícono nuevo para cualquier launcher. Con Simón Launcher podés cambiar el ícono de cada app directamente, sin accesos directos.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
+        )
         Text("Estilo", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 20.dp, bottom = 6.dp))
         LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             item {
@@ -269,6 +265,7 @@ fun IconEditorScreen(nav: Nav, packageName: String, themeId: String?) {
                     if (imagePath != null) FilledTonalButton(onClick = { imagePath = null }) { Text("Quitar") }
                 }
             }
+            com.migux97.simon.ui.components.StickerAttachEditor(style.stickers) { style = style.copy(stickers = it) }
             Panel {
                 Text(
                     "Simón crea un acceso directo nuevo con este ícono que abre ${app.label}. Podés esconder el ícono original en tu launcher. Algunos launchers agregan una marca chiquita en la esquina.",

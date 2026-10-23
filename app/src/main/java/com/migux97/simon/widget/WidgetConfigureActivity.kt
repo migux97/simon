@@ -11,6 +11,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -62,6 +63,7 @@ class WidgetConfigureActivity : ComponentActivity() {
             SimonTheme {
                 Surface(Modifier.fillMaxSize()) {
                     val mine by Repository.designs.collectAsStateWithLifecycle()
+                    val created by com.migux97.simon.data.StudioStore.widgetsFlow.collectAsStateWithLifecycle()
                     var kind by remember { mutableStateOf<WidgetKind?>(null) }
                     val own = mine.filter { it.size == size && (kind == null || it.kind == kind) }
                     val templates = Catalog.templatesFor(kind, size)
@@ -79,6 +81,17 @@ class WidgetConfigureActivity : ComponentActivity() {
                         }
                         item(span = { GridItemSpan(maxLineSpan) }) {
                             ChoiceChips(listOf<WidgetKind?>(null) + WidgetKind.entries, kind, { it?.label ?: "Todos" }, { kind = it }, Modifier.padding(vertical = 4.dp))
+                        }
+                        if (created.isNotEmpty() && kind == null) {
+                            item(span = { GridItemSpan(maxLineSpan) }) { Text("Widgets que creaste", style = MaterialTheme.typography.titleMedium) }
+                            items(created, key = { "c" + it.id }, span = { GridItemSpan(if (size == WidgetSize.SMALL) 1 else 2) }) { cw ->
+                                Column(Modifier.clickable { chooseCustom(cw.id) }) {
+                                    androidx.compose.foundation.layout.Box(
+                                        Modifier.fillMaxWidth().aspectRatio(cw.aspect.coerceIn(0.4f, 4f))
+                                    ) { com.migux97.simon.custom.CustomWidgetLive(cw, Modifier.fillMaxSize(), interactive = false) }
+                                    Text(cw.name, style = MaterialTheme.typography.labelLarge, maxLines = 1, modifier = Modifier.padding(top = 4.dp, start = 4.dp))
+                                }
+                            }
                         }
                         if (own.isNotEmpty()) {
                             item(span = { GridItemSpan(maxLineSpan) }) { Text("Mis diseños", style = MaterialTheme.typography.titleMedium) }
@@ -102,6 +115,14 @@ class WidgetConfigureActivity : ComponentActivity() {
             WidgetOnBackdrop(d, Modifier.fillMaxWidth())
             Text(d.name, style = MaterialTheme.typography.labelLarge, maxLines = 1, modifier = Modifier.padding(top = 4.dp, start = 4.dp))
         }
+    }
+
+    private fun chooseCustom(widgetId: String) {
+        Repository.bindWidget(this.widgetId, WidgetUpdater.CUSTOM_PREFIX + widgetId)
+        WidgetUpdater.update(this, AppWidgetManager.getInstance(this), this.widgetId)
+        WidgetUpdater.scheduleTick(this)
+        setResult(Activity.RESULT_OK, Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, this.widgetId))
+        finish()
     }
 
     private fun choose(design: WidgetDesign, saved: Boolean) {
