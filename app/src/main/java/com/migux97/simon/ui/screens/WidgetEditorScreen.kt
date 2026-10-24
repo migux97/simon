@@ -348,23 +348,28 @@ private fun StyleTab(d: WidgetDesign, sizeLocked: Boolean, onChange: (WidgetDesi
         FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Catalog.palettes.forEach { p ->
                 val selected = d.color1 == p.c1 && d.color2 == p.c2 && d.textColor == p.text
-                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(60.dp)) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .width(60.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable {
+                            onChange(
+                                d.copy(
+                                    color1 = p.c1, color2 = p.c2, textColor = p.text, accentColor = p.accent,
+                                    bgStyle = if (d.bgStyle == BgStyle.PHOTO) BgStyle.PHOTO else p.bg,
+                                    font = p.font, decoration = if (d.kind == WidgetKind.PHOTO) Decoration.NONE else p.decoration,
+                                    gradientAngle = p.angle
+                                )
+                            )
+                        }
+                ) {
                     Box(
                         Modifier
                             .size(48.dp)
                             .clip(CircleShape)
                             .background(Brush.linearGradient(listOf(Color(p.c1), Color(p.c2))))
-                            .border(if (selected) 3.dp else 1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant, CircleShape)
-                            .clickable {
-                                onChange(
-                                    d.copy(
-                                        color1 = p.c1, color2 = p.c2, textColor = p.text, accentColor = p.accent,
-                                        bgStyle = if (d.bgStyle == BgStyle.PHOTO) BgStyle.PHOTO else p.bg,
-                                        font = p.font, decoration = if (d.kind == WidgetKind.PHOTO) Decoration.NONE else p.decoration,
-                                        gradientAngle = p.angle
-                                    )
-                                )
-                            },
+                            .border(if (selected) 3.dp else 1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant, CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
                         Box(Modifier.size(12.dp).clip(CircleShape).background(Color(p.accent)))

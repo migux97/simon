@@ -36,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -46,6 +47,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.migux97.simon.data.CustomIcon
 import com.migux97.simon.data.CustomWidget
@@ -62,6 +65,7 @@ import com.migux97.simon.ui.components.GradientBadge
 import com.migux97.simon.ui.components.SceneThumb
 import com.migux97.simon.ui.components.WidgetOnBackdrop
 import com.migux97.simon.ui.theme.SimonGradient
+import com.migux97.simon.wallpaper.LiveWallpaper
 import com.migux97.simon.widget.WidgetUpdater
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -105,7 +109,12 @@ fun MineScreen(nav: Nav) {
     val created by StudioStore.widgetsFlow.collectAsStateWithLifecycle()
     val bindings by Repository.bindings.collectAsStateWithLifecycle()
     val savedLive by Repository.savedLive.collectAsStateWithLifecycle()
-    val active by Repository.live.collectAsStateWithLifecycle()
+    val lastLive by Repository.live.collectAsStateWithLifecycle()
+    // El último animado aplicado solo está "Activo" si sigue puesto (pudiste cambiar a un fondo estático).
+    var resumeTick by remember { mutableIntStateOf(0) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeTick++ }
+    val liveActive = remember(resumeTick) { LiveWallpaper.isActive(context) }
+    val active = if (liveActive) lastLive else null
     val icons by Repository.icons.collectAsStateWithLifecycle()
     var pending by remember { mutableStateOf<PendingDelete?>(null) }
     var renameDesign by remember { mutableStateOf<WidgetDesign?>(null) }

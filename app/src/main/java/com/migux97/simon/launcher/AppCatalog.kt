@@ -13,6 +13,9 @@ import android.os.UserHandle
 import android.provider.Settings
 import android.util.LruCache
 import android.widget.Toast
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.core.graphics.drawable.toBitmap
 import com.migux97.simon.data.AppOverride
 import com.migux97.simon.data.IconForeground
@@ -48,6 +51,9 @@ object AppCatalog {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val _apps = MutableStateFlow<List<LaunchApp>>(emptyList())
     val apps: StateFlow<List<LaunchApp>> = _apps.asStateFlow()
+    // La misma lista como estado de Compose: así lo que llama a find() se vuelve a dibujar
+    // cuando las apps terminan de cargar (si no, el launcher arranca sin íconos ni dock).
+    private var observed by mutableStateOf<List<LaunchApp>>(emptyList())
     private var registered = false
 
     fun key(pkg: String, cls: String) = "$pkg/$cls"
@@ -88,10 +94,11 @@ object AppCatalog {
             }
             IconResolver.clear()
             _apps.value = list
+            observed = list
         }
     }
 
-    fun find(key: String?): LaunchApp? = key?.let { k -> _apps.value.firstOrNull { it.key == k } }
+    fun find(key: String?): LaunchApp? = key?.let { k -> observed.firstOrNull { it.key == k } }
 
     fun label(app: LaunchApp): String = StudioStore.override(app.key)?.label?.takeIf { it.isNotBlank() } ?: app.label
 

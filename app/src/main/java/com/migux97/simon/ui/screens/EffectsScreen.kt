@@ -28,7 +28,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -95,8 +95,8 @@ fun EffectsScreen(nav: Nav) {
 
     Column(Modifier.fillMaxSize()) {
         BackTopBar("Efectos y panel", onBack = { nav.back() })
-        TabRow(selectedTabIndex = tab, containerColor = MaterialTheme.colorScheme.background) {
-            listOf("Notificación", "Desbloqueo", "Pantalla", "Carga", "Panel").forEachIndexed { i, t -> Tab(tab == i, { tab = i }, text = { Text(t, maxLines = 1) }) }
+        ScrollableTabRow(selectedTabIndex = tab, edgePadding = 12.dp, containerColor = MaterialTheme.colorScheme.background) {
+            listOf("Notificación", "Desbloqueo", "Pantalla", "Carga", "Panel").forEachIndexed { i, t -> Tab(tab == i, { tab = i }, text = { Text(t) }) }
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(vertical = 8.dp)) {
             when (tab) {

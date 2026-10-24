@@ -183,7 +183,8 @@ fun BubbleFace(s: BubbleSettings, onTap: () -> Unit, onLongPress: () -> Unit, on
             .pointerInput(Unit) { detectTapGestures(onTap = { onTap() }, onLongPress = { onLongPress() }) }
             .pointerInput(Unit) { detectDragGestures(onDrag = { c, d -> c.consume(); onDrag(d) }, onDragEnd = { onDragEnd() }) }
             .padding(4.dp)
-            .shadow(8.dp, CircleShape)
+            // Sombra chica: la ventana mide justo la burbuja y una sombra más grande se corta en recto.
+            .shadow(3.dp, CircleShape)
             .clip(CircleShape)
             .background(Brush.linearGradient(listOf(Color(s.color1).copy(alpha = s.alpha), Color(s.color2).copy(alpha = s.alpha)))),
         contentAlignment = Alignment.Center

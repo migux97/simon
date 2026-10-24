@@ -434,7 +434,8 @@ fun BackupScreen(nav: Nav) {
 
     fun toast(msg: String) = Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
 
-    val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+    // Con "application/zip" el selector de archivos le agrega ".zip" y queda "copia.simon.zip".
+    val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         if (uri != null) {
             busy = true
             scope.launch {

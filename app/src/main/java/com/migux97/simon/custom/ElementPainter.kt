@@ -82,7 +82,7 @@ object Tokens {
             "{dia}" to WidgetRenderer.capitalize(f("EEEE")),
             "{diacorto}" to WidgetRenderer.capitalize(f("EEE")).trimEnd('.'),
             "{num}" to now.get(Calendar.DAY_OF_MONTH).toString(),
-            "{mes}" to WidgetRenderer.capitalize(f("MMMM")),
+            "{mes}" to f("MMMM"),
             "{año}" to now.get(Calendar.YEAR).toString(),
             "{fecha}" to f("d 'de' MMMM 'de' yyyy"),
             "{bateria}" to "${env.batteryLevel}%",

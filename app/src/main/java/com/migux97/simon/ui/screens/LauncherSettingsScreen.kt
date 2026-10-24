@@ -137,6 +137,13 @@ fun LauncherSettingsScreen(nav: Nav) {
             if (path != null) set { it.copy(background = it.background.copy(type = LauncherBgType.VIDEO, path = path)) }
         }
     }
+    // El pedido de rol del sistema necesita abrirse "para resultado": con NEW_TASK se cierra solo sin preguntar.
+    val chooseHome = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        isDefault = SystemActions.isDefaultLauncher(context)
+    }
+    fun askToBeHome() {
+        try { chooseHome.launch(SystemActions.requestDefaultLauncher(context)) } catch (_: Exception) {}
+    }
 
     Column(Modifier.fillMaxSize()) {
         BackTopBar("Simón Launcher", onBack = { nav.back() })
@@ -146,8 +153,13 @@ fun LauncherSettingsScreen(nav: Nav) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Modo launcher", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
                     Switch(mode.launcherEnabled, { on ->
-                        val intent = if (on) LauncherMode.enable(context) else LauncherMode.disable(context)
-                        try { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (_: Exception) {}
+                        if (on) {
+                            LauncherMode.enable(context)
+                            askToBeHome()
+                        } else {
+                            val intent = LauncherMode.disable(context)
+                            try { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (_: Exception) {}
+                        }
                     })
                 }
                 Text(
@@ -174,9 +186,7 @@ fun LauncherSettingsScreen(nav: Nav) {
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (!isDefault) Button(onClick = {
-                        try { context.startActivity(SystemActions.requestDefaultLauncher(context).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (_: Exception) {}
-                    }) { Text("Usar Simón") }
+                    if (!isDefault) Button(onClick = { askToBeHome() }) { Text("Usar Simón") }
                     OutlinedButton(onClick = {
                         context.startActivity(Intent(context, LauncherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                     }) { Text("Abrir launcher") }

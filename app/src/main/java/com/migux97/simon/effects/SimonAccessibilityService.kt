@@ -2,8 +2,12 @@ package com.migux97.simon.effects
 
 import android.accessibilityservice.AccessibilityService
 import android.annotation.SuppressLint
+import android.app.KeyguardManager
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
@@ -15,6 +19,7 @@ import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import androidx.compose.ui.platform.ComposeView
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
@@ -86,6 +91,37 @@ class SimonAccessibilityService : AccessibilityService() {
             StudioStore.bubbleFlow.map { listOf(it.enabled, it.sizeDp, it.color1, it.color2, it.stickerId, it.alpha) }
                 .distinctUntilChanged().collect { updateBubble() }
         }
+        ContextCompat.registerReceiver(this, screenReceiver, IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_USER_PRESENT)
+        }, ContextCompat.RECEIVER_NOT_EXPORTED)
+    }
+
+    // ------------------------------------------ cuándo se ven la barra y la burbuja
+
+    // Las ventanas de accesibilidad también se ven sobre el bloqueo: la pestaña y la burbuja
+    // se sacan con la pantalla apagada, con el teléfono bloqueado y sobre las pantallas de
+    // bloqueo y carga de Simón (así no se usan sus herramientas sin desbloquear).
+    private var screenOff = false
+    private var onSimonFullScreen = false
+    private var floatingAllowed = true
+
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, i: Intent) {
+            screenOff = i.action == Intent.ACTION_SCREEN_OFF
+            syncFloating()
+        }
+    }
+
+    private fun syncFloating() {
+        val locked = getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true
+        val allowed = !screenOff && !locked && !onSimonFullScreen
+        if (allowed == floatingAllowed) return
+        floatingAllowed = allowed
+        if (!allowed) { hideEdgePanel(); hideBubbleMenu() }
+        updateEdgeHandle()
+        updateBubble()
     }
 
     private fun fullScreenParams(focusable: Boolean = true) = WindowManager.LayoutParams(
@@ -117,7 +153,7 @@ class SimonAccessibilityService : AccessibilityService() {
     private fun updateEdgeHandle() {
         removeEdgeHandle()
         val s = StudioStore.edgeSettings
-        if (!s.enabled) { hideEdgePanel(); return }
+        if (!s.enabled || !floatingAllowed) { hideEdgePanel(); return }
         val dm = resources.displayMetrics
         val w = (14 * dm.density).toInt()
         val h = (dm.heightPixels * s.handleHeight.coerceIn(0.05f, 0.6f)).toInt()
@@ -207,7 +243,7 @@ class SimonAccessibilityService : AccessibilityService() {
     private fun updateBubble() {
         removeBubble()
         val s = StudioStore.bubbleSettings
-        if (!s.enabled) { hideBubbleMenu(); return }
+        if (!s.enabled || !floatingAllowed) { hideBubbleMenu(); return }
         val dm = resources.displayMetrics
         val sizePx = (s.sizeDp.coerceIn(32, 96) * dm.density).toInt()
         val params = WindowManager.LayoutParams(
@@ -324,10 +360,13 @@ class SimonAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = event.packageName?.toString() ?: return
-        // El panel de notificaciones y el teclado no cambian lo que hay debajo.
-        if (pkg == "com.android.systemui") return
+        // El panel de notificaciones y el teclado no cambian lo que hay debajo (pero el bloqueo sí).
+        if (pkg == "com.android.systemui") { syncFloating(); return }
         // Las ventanas flotantes propias (panel, efectos) no cuentan; las pantallas de Simón sí.
-        if (pkg == packageName && event.className?.toString()?.contains("Activity") != true) return
+        val cls = event.className?.toString().orEmpty()
+        if (pkg == packageName && !cls.contains("Activity")) return
+        onSimonFullScreen = pkg == packageName && (cls.endsWith("LockActivity") || cls.endsWith("ChargingActivity"))
+        syncFloating()
         val mode = StudioStore.appMode
         val home = homePackage()
         if (mode.overlayEnabled && pkg == home && home != packageName) showOverlay() else hideOverlay()
@@ -374,6 +413,7 @@ class SimonAccessibilityService : AccessibilityService() {
     override fun onInterrupt() = Unit
 
     override fun onDestroy() {
+        try { unregisterReceiver(screenReceiver) } catch (_: Exception) {}
         hideOverlay()
         removeTrigger()
         removeEdgeHandle()

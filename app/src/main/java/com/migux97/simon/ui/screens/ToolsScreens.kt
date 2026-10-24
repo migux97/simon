@@ -133,7 +133,7 @@ fun ToolsHubScreen(nav: Nav) {
         )
         val activeRoutines = routines.count { it.enabled }
         ToolCard("Rutinas automáticas", "Cuando pase algo (una hora, el cargador, auriculares, Wi-Fi…), Simón cambia el fondo, el tema, el sonido, el brillo y más.",
-            if (activeRoutines > 0) "$activeRoutines activas" else null, listOf(Color(0xFF8B6CFF), Color(0xFF4A2FBD))) { nav.go("routines") }
+            if (activeRoutines > 0) "$activeRoutines ${if (activeRoutines == 1) "activa" else "activas"}" else null, listOf(Color(0xFF8B6CFF), Color(0xFF4A2FBD))) { nav.go("routines") }
         ToolCard("Fondos que cambian solos", "Una lista de fondos que rota cada cierto tiempo o al desbloquear, o un fondo de día y otro de noche.",
             if (rotation.mode != RotationMode.OFF) rotation.mode.label else null, listOf(Color(0xFF1FA2FF), Color(0xFF12D8FA))) { nav.go("rotation") }
         ToolCard("Pantalla al cargar", "Al enchufar el teléfono: reloj grande, batería, próxima alarma, una escena animada y tus stickers.",

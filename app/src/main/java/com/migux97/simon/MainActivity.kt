@@ -21,8 +21,11 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Repository.init(this)
         enableEdgeToEdge()
-        editDesign = intent?.getStringExtra(EXTRA_EDIT_DESIGN)
-        route = intent?.getStringExtra(EXTRA_ROUTE)
+        // Al recrearse (cambio de fondo, tema, rotación) el intent original sigue ahí: no volver a abrirlo.
+        if (savedInstanceState == null) {
+            editDesign = intent?.getStringExtra(EXTRA_EDIT_DESIGN)
+            route = intent?.getStringExtra(EXTRA_ROUTE)
+        }
         setContent {
             SimonTheme {
                 androidx.compose.runtime.CompositionLocalProvider(
