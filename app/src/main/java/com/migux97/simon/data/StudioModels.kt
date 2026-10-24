@@ -25,7 +25,7 @@ enum class Motion(val label: String) {
 // ======================================================================
 
 @Serializable
-enum class ItemType { APP, CUSTOM_WIDGET, DESIGN_WIDGET, SYSTEM_WIDGET, STICKER, FOLDER }
+enum class ItemType { APP, CUSTOM_WIDGET, DESIGN_WIDGET, SYSTEM_WIDGET, STICKER, FOLDER, ELEMENT }
 
 @Serializable
 enum class StickerSource { IMAGE, DRAWING, ANIMATION, VIDEO, SCENE, LIBRARY }
@@ -62,7 +62,12 @@ data class HomeItem(
     val title: String = "",
     val folderApps: List<String> = emptyList(),
     val folderColor: Int = 0x66FFFFFF,
-    val stickers: List<StickerAttach> = emptyList()
+    val stickers: List<StickerAttach> = emptyList(),
+    // Editor tipo Canva: capas ocultas, grupos y elementos libres (texto, formas…)
+    val hidden: Boolean = false,
+    val groupId: String? = null,
+    /** Solo para [ItemType.ELEMENT]: el elemento ocupa todo el cuadro (x = y = 0, w = h = 1). */
+    val element: WElement? = null
 )
 
 /** Personalización de una app concreta (vale en inicio, dock, cajón y carpetas). */
@@ -261,7 +266,9 @@ data class WElement(
     val action: TapAction = TapAction.NONE,
     val actionData: String = "",
     // Capa oculta en el constructor (no se dibuja)
-    val hidden: Boolean = false
+    val hidden: Boolean = false,
+    val locked: Boolean = false,
+    val groupId: String? = null
 )
 
 @Serializable

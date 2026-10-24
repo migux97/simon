@@ -438,7 +438,7 @@ fun AppPickerList(apps: List<LaunchApp>, onPick: (LaunchApp) -> Unit) {
 }
 
 @Composable
-private fun SystemWidgetList(onPick: (AppWidgetProviderInfo) -> Unit) {
+internal fun SystemWidgetList(onPick: (AppWidgetProviderInfo) -> Unit) {
     val context = LocalContext.current
     // null = todavía buscando; lista vacía = no hay widgets.
     val loaded by produceState<List<AppWidgetProviderInfo>?>(null) {
@@ -473,6 +473,7 @@ private fun typeName(item: HomeItem): String = when (item.type) {
     ItemType.APP -> "Editar app"
     ItemType.FOLDER -> "Editar carpeta"
     ItemType.CUSTOM_WIDGET, ItemType.DESIGN_WIDGET, ItemType.SYSTEM_WIDGET -> "Editar widget"
+    ItemType.ELEMENT -> "Editar elemento"
     ItemType.STICKER -> when (item.stickerSource) {
         StickerSource.IMAGE -> "Editar foto"
         StickerSource.VIDEO -> "Editar video"
@@ -651,6 +652,10 @@ fun ItemEditorSheet(original: HomeItem, settings: LauncherSettings, ui: Launcher
                         }
                     }
                 }
+                ItemType.ELEMENT -> Text(
+                    "El texto, la forma y los colores se cambian con «Editar» en el editor de la pantalla.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 ItemType.SYSTEM_WIDGET -> Text(
                     "Es un widget de otra app: su contenido lo maneja esa app. Acá podés cambiar el tamaño, la posición y el giro.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant

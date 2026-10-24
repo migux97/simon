@@ -66,6 +66,8 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.migux97.simon.data.GestureAction
+import com.migux97.simon.canva.CanvaPageEditor
+import com.migux97.simon.canva.LauncherPageControls
 import com.migux97.simon.data.HomeItem
 import com.migux97.simon.data.ItemType
 import com.migux97.simon.data.PageTransition
@@ -103,8 +105,14 @@ class LauncherUi {
     /** Widgets del sistema quitados: se liberan al salir de la edición, por si se deshace. */
     private val removedWidgets = mutableListOf<Int>()
 
+    /** Lo avisa el editor tipo Canva para anotar el cambio en su propio historial. */
+    var onSnapshot: (() -> Unit)? = null
+
     /** Guarda cómo está todo antes de un cambio, para poder deshacerlo. */
-    fun snapshot() = undo.push(StudioStore.items)
+    fun snapshot() {
+        undo.push(StudioStore.items)
+        onSnapshot?.invoke()
+    }
 
     fun undoLast() {
         val prev = undo.pop() ?: return
@@ -276,6 +284,10 @@ fun LauncherRoot(
         }
     }
 
+    // Página que se edita: arranca en la que estabas mirando.
+    var editPage by remember { mutableIntStateOf(0) }
+    LaunchedEffect(ui.editMode) { if (ui.editMode) editPage = pager.currentPage }
+
     // Al entrar o salir de la edición: el historial de deshacer arranca de nuevo.
     LaunchedEffect(ui.editMode) {
         ui.flushRemovedWidgets(context)
@@ -355,7 +367,8 @@ fun LauncherRoot(
       CompositionLocalProvider(LocalAnimationsActive provides allowed) {
         LauncherBackgroundLayer(settings.background, pager)
 
-        HorizontalPager(
+        // En modo edición se ve el editor tipo Canva de la página en lugar del launcher.
+        if (!ui.editMode) HorizontalPager(
             state = pager,
             modifier = Modifier.fillMaxSize(),
             beyondViewportPageCount = 1,
@@ -387,7 +400,7 @@ fun LauncherRoot(
         }
 
         // Indicador de páginas + dock
-        Column(
+        if (!ui.editMode) Column(
             Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
@@ -409,10 +422,28 @@ fun LauncherRoot(
             if (settings.dockEnabled) Dock(settings, ui)
         }
 
-        if (ui.editMode) EditBar(ui, settings, items, pager, onAddPage = {
-            StudioStore.updateLauncher { it.copy(pages = (it.pages + 1).coerceAtMost(12)) }
-            scope.launch { pager.animateScrollToPage(pages) }
-        })
+        if (ui.editMode) {
+            CanvaPageEditor(
+                page = editPage.coerceIn(0, pages - 1),
+                title = "Página ${editPage.coerceIn(0, pages - 1) + 1}",
+                ui = ui,
+                onDone = { ui.editMode = false; ui.selectedId = null },
+                launcher = LauncherPageControls(
+                    pages = pages,
+                    onSwitch = { p -> editPage = p; scope.launch { pager.scrollToPage(p) } },
+                    onAddPage = {
+                        StudioStore.updateLauncher { it.copy(pages = (it.pages + 1).coerceAtMost(12)) }
+                        editPage = pages
+                    },
+                    onDeletePage = { p ->
+                        LauncherLayout.deletePage(context, p)
+                        editPage = (p - 1).coerceAtLeast(0)
+                        scope.launch { pager.scrollToPage(editPage) }
+                    }
+                ),
+                onPickSystemWidget = onPickSystemWidget
+            )
+        }
 
         AnimatedVisibility(ui.drawerOpen, enter = slideInVertically { it / 3 } + fadeIn(), exit = slideOutVertically { it / 3 } + fadeOut()) {
             AppDrawer(apps, settings, ui)
@@ -423,10 +454,11 @@ fun LauncherRoot(
     }
 
     if (ui.addSheet) AddSheet(ui, settings, pager.currentPage, onPickSystemWidget)
-    ui.editItem?.let { ItemEditorSheet(it, settings, ui) }
+    // En modo edición estas hojas las muestra el editor de la página.
+    if (!ui.editMode) ui.editItem?.let { ItemEditorSheet(it, settings, ui) }
     ui.appMenu?.let { AppMenuSheet(it, ui.appMenuItem, settings, ui, pager.currentPage) }
     ui.iconEditor?.let { IconOverrideSheet(it, settings, ui) }
-    if (ui.dockEditor) DockEditorSheet(settings, ui)
+    if (!ui.editMode && ui.dockEditor) DockEditorSheet(settings, ui)
 
     if (apps.isNotEmpty() && !settings.initialized) {
         AlertDialog(

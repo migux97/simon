@@ -39,6 +39,29 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.OpenInFull
+import androidx.compose.material.icons.filled.AutoAwesomeMosaic
+import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.EmojiEmotions
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.TextFields
+import androidx.compose.material.icons.filled.Widgets
+import androidx.compose.material3.IconButton
+import com.migux97.simon.canva.CLayer
+import com.migux97.simon.canva.CanvaEditor
+import com.migux97.simon.canva.CanvaPresets
+import com.migux97.simon.canva.CanvaSection
+import com.migux97.simon.canva.CanvaSource
+import com.migux97.simon.canva.CanvaState
+import com.migux97.simon.canva.CanvaTool
+import com.migux97.simon.canva.ElementBlock
+import com.migux97.simon.canva.MyMediaRows
+import com.migux97.simon.canva.ScenesRow
+import com.migux97.simon.canva.ShapesAndGraphics
+import com.migux97.simon.canva.TextPanel
+import com.migux97.simon.canva.WidgetTemplateGrid
+import com.migux97.simon.canva.placeOn
+import com.migux97.simon.ui.components.ConfirmDialog
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -122,9 +145,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
-private const val HINTS_PREFS = "simon_hints"
-private const val HINT_BUILDER_GESTURES = "builder_gestures"
-
 /** Elementos nuevos con valores lindos por defecto. */
 private fun newElement(type: ElementType): WElement = when (type) {
     ElementType.TEXT -> WElement(type = type, text = "{hora}", x = 0.1f, y = 0.25f, w = 0.8f, h = 0.4f, font = FontStyle.LIGHT)
@@ -166,6 +186,42 @@ internal fun builderStarter(kind: Int): CustomWidget = when (kind) {
     else -> CustomWidget(name = "Mi widget", aspect = 2f, elements = listOf(newElement(ElementType.TEXT)))
 }
 
+/** Cómo ve el editor tipo Canva a los elementos de un widget creado. */
+private object WidgetSource : CanvaSource<CustomWidget> {
+    override fun layers(doc: CustomWidget) = doc.elements.map {
+        CLayer(it.id, it.x, it.y, it.w, it.h, it.rotation, it.alpha, it.locked, it.hidden, it.groupId, it.layerLabel())
+    }
+
+    override fun applyLayers(doc: CustomWidget, changed: List<CLayer>): CustomWidget {
+        val byId = changed.associateBy { it.id }
+        return doc.copy(elements = doc.elements.map { e ->
+            byId[e.id]?.let { l -> e.copy(x = l.x, y = l.y, w = l.w, h = l.h, rotation = l.rotation, alpha = l.alpha, locked = l.locked, hidden = l.hidden, groupId = l.groupId) } ?: e
+        })
+    }
+
+    override fun reorder(doc: CustomWidget, idsBackToFront: List<String>): CustomWidget {
+        val byId = doc.elements.associateBy { it.id }
+        val ordered = idsBackToFront.mapNotNull { byId[it] }
+        return doc.copy(elements = ordered + doc.elements.filter { it.id !in idsBackToFront })
+    }
+
+    override fun remove(doc: CustomWidget, ids: Set<String>) = doc.copy(elements = doc.elements.filterNot { it.id in ids })
+
+    override fun duplicate(doc: CustomWidget, ids: List<String>): Pair<CustomWidget, List<String>> {
+        val copies = ids.mapNotNull { id -> doc.elements.firstOrNull { it.id == id } }
+            .map { it.copy(id = newId(), x = it.x + 0.04f, y = it.y + 0.04f) }
+        return doc.copy(elements = doc.elements + copies) to copies.map { it.id }
+    }
+}
+
+/** Nombre de la capa en el panel «Capas». */
+internal fun WElement.layerLabel(): String = when (type) {
+    // Los datos en vivo se muestran con su nombre: «{bateria}» → «Batería %».
+    ElementType.TEXT -> "Texto · " + Tokens.all.fold(text.ifBlank { "vacío" }) { acc, (token, name) -> acc.replace(token, name) }.take(32)
+    ElementType.SHAPE -> shape.label
+    else -> type.label
+}
+
 @Composable
 fun BuilderScreen(nav: Nav, widgetId: String) {
     val context = LocalContext.current
@@ -177,72 +233,45 @@ fun BuilderScreen(nav: Nav, widgetId: String) {
             else -> builderStarter(0)
         }
     }
-    var w by remember(widgetId) { mutableStateOf(initial) }
     // Última versión guardada (null = todavía no se guardó nunca).
     var saved by remember(widgetId) { mutableStateOf(stored) }
+    val state = remember(widgetId) { CanvaState(initial, WidgetSource) {} }
+    val w = state.doc
     val dirty = w != (saved ?: initial)
-    val undo = remember(widgetId) { UndoStack<CustomWidget>() }
-    val lastPush = remember(widgetId) { longArrayOf(0L) }
-    val snackbar = remember { SnackbarHostState() }
-    var selectedId by remember { mutableStateOf<String?>(w.elements.firstOrNull()?.id) }
-    var tab by remember { mutableIntStateOf(0) }
-    var addMenu by remember { mutableStateOf(false) }
-    var pickApp by remember { mutableStateOf<((String) -> Unit)?>(null) }
     var confirmExit by remember { mutableStateOf(false) }
-    val hints = remember { context.getSharedPreferences(HINTS_PREFS, Context.MODE_PRIVATE) }
-    var showHint by remember { mutableStateOf(!hints.getBoolean(HINT_BUILDER_GESTURES, false)) }
-    val selected = w.elements.firstOrNull { it.id == selectedId }
+    var pickApp by remember { mutableStateOf<((String) -> Unit)?>(null) }
+    var askTemplate by remember { mutableStateOf<CustomWidget?>(null) }
+    var pickSticker by remember { mutableStateOf(false) }
+    var menu by remember { mutableStateOf(false) }
 
-    /**
-     * Aplica un cambio guardando el estado anterior para «Deshacer». Los cambios
-     * seguidos (por ejemplo al mover un deslizador) se juntan en un solo paso.
-     */
-    fun change(next: CustomWidget, coalesce: Boolean = true) {
-        if (next == w) return
-        val now = System.currentTimeMillis()
-        if (!coalesce || now - lastPush[0] > 700L) undo.push(w)
-        lastPush[0] = now
-        w = next
-    }
-    fun updateEl(e: WElement) = change(w.copy(elements = w.elements.map { if (it.id == e.id) e else it }))
-    /** Para arrastres: el estado anterior se guardó al empezar el gesto. */
-    fun updateElDuringGesture(e: WElement) { w = w.copy(elements = w.elements.map { if (it.id == e.id) e else it }) }
-    fun beginGesture() {
-        undo.push(w)
-        lastPush[0] = System.currentTimeMillis()
-    }
-    fun moveLayer(from: Int, to: Int) {
-        val list = w.elements.toMutableList()
-        if (from !in list.indices || to !in list.indices || from == to) return
-        val el = list.removeAt(from)
-        list.add(to, el)
-        change(w.copy(elements = list), coalesce = false)
-    }
-    fun doUndo() {
-        val prev = undo.pop() ?: return
-        w = prev
-        if (prev.elements.none { it.id == selectedId }) selectedId = prev.elements.lastOrNull()?.id
-    }
-    fun deleteElement(el: WElement) {
-        val before = w
-        change(w.copy(elements = w.elements.filterNot { it.id == el.id }), coalesce = false)
-        selectedId = w.elements.lastOrNull()?.id
-        scope.launch {
-            snackbar.currentSnackbarData?.dismiss()
-            val result = snackbar.showSnackbar("Borraste «${el.type.label}»", actionLabel = "Deshacer", duration = SnackbarDuration.Short)
-            if (result == SnackbarResult.ActionPerformed) {
-                change(before, coalesce = false)
-                selectedId = el.id
-            }
-        }
-    }
     fun save(): CustomWidget {
-        val current = w
+        val current = state.doc
         StudioStore.saveWidget(current)
         WidgetUpdater.updateCustomWidget(context, current.id)
         if (current.city.isNotBlank()) RefreshWorker.runNow(context)
         saved = current
         return current
+    }
+
+    fun add(list: List<WElement>) {
+        if (list.isEmpty()) return
+        state.update { it.copy(elements = it.elements + list) }
+        state.select(list.map { it.id })
+        state.panel = null
+    }
+    fun addBlock(b: ElementBlock) = add(b.placeOn(state.doc.aspect, state.doc.elements.size).map { CanvaPresets.withMotion(it) })
+    fun addOne(e: WElement, w: Float = 0.5f, hW: Float = 0.5f) = addBlock(ElementBlock(e.type.label, w, hW, listOf(e.copy(x = 0f, y = 0f, w = 1f, h = 1f))))
+    fun updateEl(e: WElement) = state.update(coalesce = true) { d -> d.copy(elements = d.elements.map { if (it.id == e.id) e else it }) }
+    fun applyTemplate(t: CustomWidget) {
+        state.update {
+            it.copy(
+                aspect = t.aspect, bg1 = t.bg1, bg2 = t.bg2, bgGradient = t.bgGradient, bgAngle = t.bgAngle, bgAlpha = t.bgAlpha,
+                corner = t.corner, bgImage = null, name = if (it.name == "Mi widget") t.name else it.name,
+                elements = t.elements.map { e -> e.copy(id = newId()) }
+            )
+        }
+        state.clearSelection()
+        state.panel = null
     }
 
     var pickTarget by remember { mutableStateOf("") }
@@ -252,183 +281,74 @@ fun BuilderScreen(nav: Nav, widgetId: String) {
             val path = withContext(Dispatchers.IO) { if (isVideo) ImageStore.importVideo(context, uri) else ImageStore.importImage(context, uri, 1400) }
             if (path == null) return@launch
             when (pickTarget) {
-                "bg" -> change(w.copy(bgImage = path), coalesce = false)
-                else -> w.elements.firstOrNull { it.id == selectedId }?.let { updateEl(it.copy(mediaPath = path)) }
+                "bg" -> state.update { it.copy(bgImage = path) }
+                "image" -> addOne(WElement(type = ElementType.IMAGE, mediaPath = path, shape = ShapeKind.ROUNDED, corner = 0.12f))
+                "video" -> addOne(WElement(type = ElementType.VIDEO, mediaPath = path, shape = ShapeKind.ROUNDED, corner = 0.12f))
+                // Cambiar la foto o el video del elemento elegido (desde «Editar»).
+                else -> state.doc.elements.firstOrNull { it.id == pickTarget }?.let { updateEl(it.copy(mediaPath = path)) }
             }
         }
     }
+    fun pick(target: String, video: Boolean) {
+        pickTarget = target
+        mediaPicker.launch(PickVisualMediaRequest(if (video) ActivityResultContracts.PickVisualMedia.VideoOnly else ActivityResultContracts.PickVisualMedia.ImageOnly))
+    }
 
-    BackHandler(enabled = dirty) { confirmExit = true }
+    val tools = listOf(
+        CanvaTool("tpl", Icons.Filled.AutoAwesomeMosaic, "Plantillas", content = {
+            WidgetTemplateGrid { t -> if (state.doc.elements.isEmpty()) applyTemplate(t) else askTemplate = t }
+        }),
+        CanvaTool("text", Icons.Filled.TextFields, "Texto", content = { TextPanel { addBlock(it) } }),
+        CanvaTool("el", Icons.Filled.Category, "Elementos", content = {
+            ShapesAndGraphics { addBlock(it) }
+            CanvaSection("Más")
+            Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilledTonalButton(onClick = {
+                    pickApp = { key -> addOne(WElement(type = ElementType.APP_ICON, appKey = key, action = TapAction.OPEN_APP, actionData = key), 0.22f, 0.22f) }
+                }) { Text("Ícono de app") }
+                FilledTonalButton(onClick = { addOne(WElement(type = ElementType.WEATHER_ICON), 0.3f, 0.3f) }) { Text("Ícono del clima") }
+            }
+            CanvaSection("Escenas animadas")
+            ScenesRow { lv -> addOne(WElement(type = ElementType.SCENE, liveId = lv.id, shape = ShapeKind.ROUNDED, corner = 0.15f), 0.5f, 0.5f) }
+        }),
+        CanvaTool("photo", Icons.Filled.Image, "Fotos", content = {
+            Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilledTonalButton(onClick = { pick("image", false) }) { Text("Elegir foto") }
+                FilledTonalButton(onClick = { pick("video", true) }) { Text("Elegir video") }
+            }
+            MyMediaRows(
+                onDrawing = { id -> addOne(WElement(type = ElementType.DRAWING, mediaId = id, shape = ShapeKind.RECT)) },
+                onAnimation = { id -> addOne(WElement(type = ElementType.ANIMATION, mediaId = id, shape = ShapeKind.RECT)) }
+            )
+        }),
+        CanvaTool("st", Icons.Filled.EmojiEmotions, "Stickers", onClick = { pickSticker = true }),
+        CanvaTool("wid", Icons.Filled.Widgets, "Widget", content = {
+            WidgetProps(state.doc, onChange = { state.commit(it, coalesce = true) }, pickBg = { pick("bg", false) }, pickApp = { cb -> pickApp = cb })
+        })
+    )
 
-    Box(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize()) {
-            BackTopBar(w.name, onBack = { if (dirty) confirmExit = true else nav.back() }) {
-                UndoButton(enabled = undo.canUndo) { doUndo() }
-                TextButton(onClick = { save(); Toast.makeText(context, "Widget guardado", Toast.LENGTH_SHORT).show() }) { Text("Guardar") }
-            }
-            if (showHint) {
-                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
-                    HelpTip("Arrastrá para mover · usá el círculo para cambiar el tamaño · tocá un elemento para editarlo")
-                    TextButton(onClick = {
-                        hints.edit().putBoolean(HINT_BUILDER_GESTURES, true).apply()
-                        showHint = false
-                    }, modifier = Modifier.padding(end = 8.dp)) { Text("Entendido") }
-                }
-            }
-            // Lienzo
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(PreviewBackdrop)
-                    .padding(18.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                BoxWithConstraints(
-                    Modifier
-                        .fillMaxWidth(if (w.aspect < 1.2f) 0.62f else 1f)
-                        .aspectRatio(w.aspect.coerceIn(0.4f, 4f))
-                        .heightIn(max = 260.dp)
-                ) {
-                    val wPx = constraints.maxWidth.toFloat()
-                    val hPx = constraints.maxHeight.toFloat()
-                    CustomWidgetLive(w, Modifier.fillMaxSize(), interactive = false)
-                    if (w.elements.none { !it.hidden }) {
-                        Text(
-                            "Vacío: tocá «Agregar elemento»",
-                            color = Color.White,
-                            style = MaterialTheme.typography.bodySmall,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.align(Alignment.Center).padding(8.dp)
-                        )
-                    }
-                    // Capa de selección y arrastre
-                    w.elements.filterNot { it.hidden }.forEach { e ->
-                        val density = LocalDensity.current
-                        val isSel = e.id == selectedId
-                        Box(
-                            Modifier
-                                .offset(with(density) { (e.x * wPx).toDp() }, with(density) { (e.y * hPx).toDp() })
-                                .size(with(density) { (e.w * wPx).toDp() }, with(density) { (e.h * hPx).toDp() })
-                                .graphicsLayer { rotationZ = e.rotation }
-                                .then(if (isSel) Modifier.border(1.5.dp, Color.White, RoundedCornerShape(4.dp)) else Modifier)
-                                .pointerInput(e.id) { detectTapGestures { selectedId = e.id } }
-                                .pointerInput(e.id) {
-                                    detectDragGestures(onDragStart = { selectedId = e.id; beginGesture() }) { ch, d ->
-                                        ch.consume()
-                                        val cur = w.elements.firstOrNull { it.id == e.id } ?: return@detectDragGestures
-                                        updateElDuringGesture(cur.copy(x = (cur.x + d.x / wPx).coerceIn(-cur.w * 0.5f, 1f - cur.w * 0.5f), y = (cur.y + d.y / hPx).coerceIn(-cur.h * 0.5f, 1f - cur.h * 0.5f)))
-                                    }
-                                }
-                        ) {
-                            if (isSel) Box(
-                                Modifier
-                                    .align(Alignment.BottomEnd)
-                                    .offset(8.dp, 8.dp)
-                                    .size(22.dp)
-                                    .shadow(3.dp, CircleShape)
-                                    .clip(CircleShape)
-                                    .background(Color.White)
-                                    .pointerInput(e.id + "r") {
-                                        detectDragGestures(onDragStart = { beginGesture() }) { ch, d ->
-                                            ch.consume()
-                                            val cur = w.elements.firstOrNull { it.id == e.id } ?: return@detectDragGestures
-                                            updateElDuringGesture(cur.copy(w = (cur.w + d.x / wPx).coerceIn(0.03f, 1.5f), h = (cur.h + d.y / hPx).coerceIn(0.03f, 1.5f)))
-                                        }
-                                    },
-                                contentAlignment = Alignment.Center
-                            ) { Icon(Icons.Filled.OpenInFull, null, tint = Color(0xFF6C4CF5), modifier = Modifier.size(12.dp)) }
-                        }
-                    }
-                }
-            }
-            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box {
-                    FilledTonalButton(onClick = { addMenu = true }) { Icon(Icons.Filled.Add, null); Spacer(Modifier.width(6.dp)); Text("Agregar elemento") }
-                    DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
-                        ElementType.entries.forEach { t ->
-                            DropdownMenuItem(text = { Text(t.label) }, onClick = {
-                                addMenu = false
-                                val e = newElement(t)
-                                change(w.copy(elements = w.elements + e), coalesce = false)
-                                selectedId = e.id
-                                tab = 0
-                            })
-                        }
-                    }
-                }
-                Spacer(Modifier.weight(1f))
-                StartOverButton(message = "Se borran todos los elementos del widget. El tamaño y el fondo quedan como están. Podés deshacerlo.") {
-                    change(w.copy(elements = emptyList()), coalesce = false)
-                    selectedId = null
-                }
-            }
-            if (selected != null) {
-                val index = w.elements.indexOfFirst { it.id == selected.id }
-                Row(
-                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(selected.type.label, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 8.dp))
-                    TextButton(onClick = {
-                        val copy = selected.copy(id = newId(), x = selected.x + 0.04f, y = selected.y + 0.04f)
-                        change(w.copy(elements = w.elements + copy), coalesce = false)
-                        selectedId = copy.id
-                    }) { Text("Duplicar") }
-                    TextButton(onClick = { moveLayer(index, w.elements.lastIndex) }, enabled = index in 0 until w.elements.lastIndex) { Text("Traer al frente") }
-                    TextButton(onClick = { moveLayer(index, 0) }, enabled = index > 0) { Text("Mandar al fondo") }
-                    TextButton(onClick = { deleteElement(selected) }) { Text("Borrar", color = MaterialTheme.colorScheme.error) }
-                }
-            }
-            ScrollableTabRow(selectedTabIndex = tab, edgePadding = 12.dp, containerColor = MaterialTheme.colorScheme.background) {
-                listOf("Elemento", "Movimiento y toque", "Widget", "Capas").forEachIndexed { i, t -> Tab(tab == i, { tab = i }, text = { Text(t) }) }
-            }
-            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(vertical = 6.dp)) {
-                when (tab) {
-                    0 -> if (selected == null) Panel { Text("Tocá un elemento en el widget o agregá uno nuevo con «Agregar elemento».") } else {
-                        if (selected.hidden) Panel { Text("Este elemento está oculto. Mostralo desde la pestaña «Capas».", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                        ElementProps(selected, { updateEl(it) },
-                            pickMedia = { target -> pickTarget = target; mediaPicker.launch(PickVisualMediaRequest(if (target == "video") ActivityResultContracts.PickVisualMedia.VideoOnly else ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                            pickApp = { cb -> pickApp = cb })
-                    }
-                    1 -> if (selected == null) Panel { Text("Tocá un elemento en el widget para elegir cómo se mueve y qué hace al tocarlo.") } else MotionProps(selected, { updateEl(it) }) { cb -> pickApp = cb }
-                    2 -> WidgetProps(w, onChange = { change(it) }, pickBg = { pickTarget = "bg"; mediaPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, pickApp = { cb -> pickApp = cb })
-                    else -> Panel {
-                        val list = w.elements
-                        if (list.isEmpty()) Text("Todavía no hay elementos. Tocá «Agregar elemento».")
-                        else Text("Lo de arriba de la lista se ve adelante en el widget.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        for (i in list.indices.reversed()) {
-                            val e = list[i]
-                            Column(
-                                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-                                    .background(if (e.id == selectedId) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
-                            ) {
-                                Row(
-                                    Modifier.fillMaxWidth().clickable { selectedId = e.id; tab = 0 }.padding(start = 10.dp, end = 10.dp, top = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(e.type.label + if (e.hidden) " (oculto)" else "", Modifier.weight(1f))
-                                    Text(if (e.type == ElementType.TEXT) e.text.take(18) else "", color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-                                }
-                                Row(Modifier.padding(horizontal = 2.dp)) {
-                                    TextButton(onClick = { moveLayer(i, i + 1) }, enabled = i < list.lastIndex) { Text("Subir") }
-                                    TextButton(onClick = { moveLayer(i, i - 1) }, enabled = i > 0) { Text("Bajar") }
-                                    TextButton(onClick = { updateEl(e.copy(hidden = !e.hidden)) }) { Text(if (e.hidden) "Mostrar" else "Ocultar") }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            Surface(tonalElevation = 3.dp) {
-                Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = {
+    CanvaEditor(
+        state = state,
+        title = w.name,
+        fullScreen = false,
+        canvasAspect = w.aspect.coerceIn(0.4f, 4f),
+        onClose = { if (dirty) confirmExit = true else nav.back() },
+        tools = tools,
+        hint = "Tocá algo para elegirlo · arrastrá para moverlo · usá las manijas para agrandar y girar · mantené presionado para elegir varios",
+        hintKey = "canva_widget",
+        topActions = {
+            TextButton(onClick = { save(); Toast.makeText(context, "Widget guardado", Toast.LENGTH_SHORT).show() }) { Text("Guardar", color = Color.White) }
+            Box {
+                IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, "Más opciones", tint = Color.White) }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(text = { Text("Agregar a mi inicio") }, onClick = {
+                        menu = false
                         val savedW = save()
                         val ok = WidgetUpdater.requestPinCustom(context, savedW)
                         Toast.makeText(context, if (ok) "Confirmá en el cartel para agregarlo a tu inicio" else "Tu launcher no permite agregarlo desde acá: mantené presionada la pantalla de inicio → Widgets → Simón.", Toast.LENGTH_LONG).show()
-                    }, modifier = Modifier.weight(1f)) { Text("Agregar a mi inicio", textAlign = TextAlign.Center) }
-                    if (StudioStore.appMode.launcherEnabled) Button(onClick = {
+                    })
+                    if (StudioStore.appMode.launcherEnabled) DropdownMenuItem(text = { Text("Agregar a Simón Launcher") }, onClick = {
+                        menu = false
                         val savedW = save()
                         val s = StudioStore.launcherSettings
                         val ww = 0.92f
@@ -436,11 +356,34 @@ fun BuilderScreen(nav: Nav, widgetId: String) {
                         val (x, y) = LauncherLayout.freeSpot(0, ww, hh, s)
                         StudioStore.upsertItem(HomeItem(type = ItemType.CUSTOM_WIDGET, x = x, y = y, w = ww, h = hh, customWidgetId = savedW.id, z = StudioStore.maxZ(0) + 1))
                         Toast.makeText(context, "Agregado a Simón Launcher (página 1)", Toast.LENGTH_SHORT).show()
-                    }, modifier = Modifier.weight(1f)) { Text("Agregar a Simón Launcher", textAlign = TextAlign.Center) }
+                    })
+                    DropdownMenuItem(text = { Text("Empezar de cero") }, onClick = {
+                        menu = false
+                        state.update { it.copy(elements = emptyList()) }
+                        state.clearSelection()
+                    })
                 }
             }
+        },
+        editPanel = { l ->
+            val e = state.doc.elements.firstOrNull { it.id == l.id }
+            if (e != null) {
+                ElementProps(e, { updateEl(it) }, pickMedia = { target -> pick(e.id, target == "video") }, pickApp = { cb -> pickApp = cb })
+                CanvaSection("Movimiento y toque")
+                MotionProps(e, { updateEl(it) }) { cb -> pickApp = cb }
+            }
         }
-        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 88.dp))
+    ) {
+        CustomWidgetLive(w, Modifier.fillMaxSize(), interactive = false)
+        if (w.elements.none { !it.hidden }) {
+            Text(
+                "Vacío: usá «Plantillas», «Texto» o «Elementos» abajo",
+                color = Color.White,
+                style = MaterialTheme.typography.bodySmall,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.align(Alignment.Center).padding(8.dp)
+            )
+        }
     }
 
     if (confirmExit) {
@@ -449,6 +392,21 @@ fun BuilderScreen(nav: Nav, widgetId: String) {
             onDiscard = { confirmExit = false; nav.back() },
             onDismiss = { confirmExit = false }
         )
+    }
+
+    askTemplate?.let { t ->
+        ConfirmDialog(
+            title = "¿Usar «${t.name}»?",
+            message = "Se reemplaza lo que tiene el widget por esta plantilla. Si te arrepentís, tocá «Deshacer».",
+            confirm = "Usar plantilla",
+            onDismiss = { askTemplate = null },
+            onConfirm = { askTemplate = null; applyTemplate(t) }
+        )
+    }
+
+    if (pickSticker) com.migux97.simon.ui.components.StickerPickerDialog(onDismiss = { pickSticker = false }) { info ->
+        pickSticker = false
+        addOne(WElement(type = ElementType.STICKER, mediaId = info.id), 0.34f, 0.34f)
     }
 
     pickApp?.let { cb ->
@@ -467,7 +425,7 @@ fun BuilderScreen(nav: Nav, widgetId: String) {
 // ---------------------------------------------------------- propiedades
 
 @Composable
-private fun ElementProps(e: WElement, onChange: (WElement) -> Unit, pickMedia: (String) -> Unit, pickApp: ((String) -> Unit) -> Unit) {
+internal fun ElementProps(e: WElement, onChange: (WElement) -> Unit, pickMedia: (String) -> Unit, pickApp: ((String) -> Unit) -> Unit) {
     val drawings by StudioStore.drawingsFlow.collectAsStateWithLifecycle()
     val animations by StudioStore.animationsFlow.collectAsStateWithLifecycle()
     when (e.type) {
@@ -595,7 +553,7 @@ private fun MediaChooser(options: List<Pair<String, String>>, selected: String?,
 }
 
 @Composable
-private fun MotionProps(e: WElement, onChange: (WElement) -> Unit, pickApp: ((String) -> Unit) -> Unit) {
+internal fun MotionProps(e: WElement, onChange: (WElement) -> Unit, pickApp: ((String) -> Unit) -> Unit) {
     Panel {
         LabeledSlider("Giro", e.rotation, -180f..180f, "${e.rotation.roundToInt()}°") { onChange(e.copy(rotation = it)) }
         LabeledSlider("Transparencia", e.alpha, 0.05f..1f, "${(e.alpha * 100).roundToInt()}%") { onChange(e.copy(alpha = it)) }
@@ -626,7 +584,7 @@ private fun ActionData(action: TapAction, data: String, onChange: (String) -> Un
 }
 
 @Composable
-private fun WidgetProps(w: CustomWidget, onChange: (CustomWidget) -> Unit, pickBg: () -> Unit, pickApp: ((String) -> Unit) -> Unit) {
+internal fun WidgetProps(w: CustomWidget, onChange: (CustomWidget) -> Unit, pickBg: () -> Unit, pickApp: ((String) -> Unit) -> Unit) {
     Panel {
         OutlinedTextField(w.name, { onChange(w.copy(name = it.take(30))) }, label = { Text("Nombre") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         Text("Forma del widget", style = MaterialTheme.typography.titleMedium)

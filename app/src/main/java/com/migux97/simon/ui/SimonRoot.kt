@@ -1,5 +1,6 @@
 package com.migux97.simon.ui
 
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Brush
@@ -113,7 +114,9 @@ fun SimonRoot(editDesignId: String?, route: String?, onEditConsumed: () -> Unit)
             }
         }
     ) { padding ->
-        NavHost(navController, startDestination = "home", modifier = Modifier.padding(padding)) {
+        // Las barras del sistema ya quedan fuera por este padding: se marcan como usadas para
+        // que las barras de arriba de cada pantalla no sumen otra vez el alto de la barra de estado.
+        NavHost(navController, startDestination = "home", modifier = Modifier.padding(padding).consumeWindowInsets(padding)) {
             composable("home") { HomeScreen(nav) }
             composable("widgets") { WidgetsScreen(nav) }
             composable("wallpapers") { WallpapersScreen(nav) }
