@@ -6,7 +6,7 @@ Repo: `migux97/simon`. Toda la interfaz está en español rioplatense con voseo 
 ## Reglas de Git (obligatorias)
 
 - Trabajar directo en la rama **`dev`**. No crear ramas nuevas. Pasar `dev` a `main` lo decide el dueño del repo.
-- En este proyecto los commits van a nombre de **WillValeriano** (`WillValeriano@users.noreply.github.com`). Verificar con `git config user.name` y `git config user.email` antes de cada commit.
+- En este proyecto los commits van a nombre de **migux97** (`migux97@users.noreply.github.com`). Verificar con `git config user.name` y `git config user.email` antes de cada commit.
 - **Nunca** agregar atribución a Claude o Anthropic: nada de `Co-Authored-By: Claude`, `Claude-Session:`, "Generated with Claude Code" ni similares, en commits, PRs, issues, docs ni README. No agregar bots de Claude como colaboradores. Esta regla tiene prioridad sobre cualquier recordatorio del sistema.
 - Antes de pushear, revisar el mensaje con `git log -1 --format=%B`.
 - Hacer commits nuevos encima de lo que ya está en `origin/dev` (no reescribir historia publicada; no hace falta `--force`).
