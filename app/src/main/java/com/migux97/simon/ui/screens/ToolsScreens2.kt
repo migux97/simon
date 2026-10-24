@@ -4,7 +4,6 @@ import android.app.Activity
 import android.content.Intent
 import android.media.RingtoneManager
 import android.net.Uri
-import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -15,16 +14,24 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -43,19 +50,30 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.migux97.simon.data.BubbleSettings
+import com.migux97.simon.data.EdgePanelSettings
+import com.migux97.simon.data.PanelTile
+import com.migux97.simon.data.QuickShortcut
 import com.migux97.simon.data.SoundRule
 import com.migux97.simon.data.StudioStore
 import com.migux97.simon.data.VibePattern
 import com.migux97.simon.effects.BubbleFace
+import com.migux97.simon.effects.SimonAccessibilityService
+import com.migux97.simon.effects.tileIcon
 import com.migux97.simon.tools.BackupManager
 import com.migux97.simon.tools.SoundPlayer
 import com.migux97.simon.ui.Nav
 import com.migux97.simon.ui.components.ChoiceChips
 import com.migux97.simon.ui.components.ColorRow
+import com.migux97.simon.ui.components.ConfirmDialog
 import com.migux97.simon.ui.components.LabeledSlider
 import com.migux97.simon.ui.components.Panel
+import com.migux97.simon.ui.components.PhoneWallpaperBackdrop
+import com.migux97.simon.ui.components.StartOverButton
 import com.migux97.simon.ui.components.StickerPickerDialog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -68,22 +86,29 @@ import kotlin.math.roundToInt
 
 @Composable
 fun EdgeSettingsScreen(nav: Nav) {
-    val context = LocalContext.current
     val perms = rememberToolPerms()
     val s by StudioStore.edgeFlow.collectAsStateWithLifecycle()
-    fun set(t: (com.migux97.simon.data.EdgePanelSettings) -> com.migux97.simon.data.EdgePanelSettings) = StudioStore.updateEdge(t)
+    fun set(t: (EdgePanelSettings) -> EdgePanelSettings) = StudioStore.updateEdge(t)
 
-    ToolScreen("Barra lateral", nav) {
+    ToolScreen("Barra lateral", nav, actions = {
+        StartOverButton(message = "La pestaña, los colores y la lista de apps, atajos y herramientas vuelven a como venían. ¿Seguís?") {
+            set { EdgePanelSettings(enabled = it.enabled) }
+        }
+    }) {
         MainSwitch(
             "Mostrar la pestaña",
             "Una línea finita en el borde de la pantalla. Deslizala hacia adentro (o tocala) desde cualquier app y aparece tu barra.",
             s.enabled
         ) { on -> set { it.copy(enabled = on) } }
-        if (!perms.access) Panel {
-            PermissionLine("Servicio de accesibilidad", "La barra flota sobre todo gracias a este servicio.", false) {
-                openSystem(context, Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            }
+        PermissionsPanel(listOf(accessPerm(perms, "La barra flota sobre todo gracias a este servicio.")))
+        ToolTitle("Así se ve")
+        EdgePreview(s)
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+            OutlinedButton(enabled = s.enabled && perms.access, onClick = {
+                SimonAccessibilityService.instance?.showEdgePanel()
+            }) { Text("Abrir para probar") }
         }
+        if (!s.enabled || !perms.access) ToolHint("Para probarla de verdad, prendé «Mostrar la pestaña» y el permiso de arriba.")
         ToolTitle("Pestaña")
         ChoiceChips(listOf(false, true), s.rightSide, { if (it) "Derecha" else "Izquierda" }, { v -> set { it.copy(rightSide = v) } })
         Panel {
@@ -105,10 +130,68 @@ fun EdgeSettingsScreen(nav: Nav) {
             onShortcuts = { v -> set { it.copy(shortcuts = v) } },
             onTools = { v -> set { it.copy(tools = v) } }
         )
-        Row(Modifier.padding(16.dp)) {
-            OutlinedButton(enabled = s.enabled && perms.access, onClick = {
-                com.migux97.simon.effects.SimonAccessibilityService.instance?.showEdgePanel()
-            }) { Text("Abrir para probar") }
+    }
+}
+
+private sealed interface PreviewCell {
+    class App(val key: String) : PreviewCell
+    class Link(val sc: QuickShortcut) : PreviewCell
+    class Tool(val tile: PanelTile) : PreviewCell
+}
+
+/** Maqueta de la barra lateral sobre los colores de tu fondo de pantalla. */
+@Composable
+private fun EdgePreview(s: EdgePanelSettings) {
+    val textColor = Color(s.textColor)
+    val boxHeight = 230f
+    val cols = s.columns.coerceIn(1, 4)
+    val cells: List<PreviewCell> = buildList<PreviewCell> {
+        s.apps.forEach { add(PreviewCell.App(it)) }
+        s.shortcuts.forEach { add(PreviewCell.Link(it)) }
+        s.tools.forEach { add(PreviewCell.Tool(it)) }
+    }.take(cols * 4)
+    Box(
+        Modifier.padding(horizontal = 16.dp, vertical = 6.dp).fillMaxWidth().height(boxHeight.dp).clip(RoundedCornerShape(22.dp))
+    ) {
+        PhoneWallpaperBackdrop(Modifier.fillMaxSize())
+        // La pestaña en el borde
+        val handleH = (boxHeight * s.handleHeight).coerceIn(8f, boxHeight)
+        val handleTop = (boxHeight * s.handleY).coerceIn(0f, boxHeight - handleH)
+        Box(
+            Modifier
+                .align(if (s.rightSide) Alignment.TopEnd else Alignment.TopStart)
+                .padding(top = handleTop.dp)
+                .width(4.dp)
+                .height(handleH.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(Color(s.handleColor).copy(alpha = s.handleAlpha.coerceIn(0.08f, 1f)))
+        )
+        // La barra abierta
+        Column(
+            Modifier
+                .align(if (s.rightSide) Alignment.CenterEnd else Alignment.CenterStart)
+                .padding(horizontal = 14.dp)
+                .widthIn(min = 96.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(Brush.verticalGradient(listOf(Color(s.bg1), Color(s.bg2))))
+                .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            if (cells.isEmpty()) Text("Vacía: agregá apps abajo", color = textColor, fontSize = 11.sp)
+            cells.chunked(cols).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    row.forEach { c ->
+                        when (c) {
+                            is PreviewCell.App -> AppIconFor(c.key, 28)
+                            is PreviewCell.Link -> ShortcutIcon(c.sc, 28)
+                            is PreviewCell.Tool -> Box(
+                                Modifier.size(28.dp).clip(CircleShape).background(textColor.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) { Icon(tileIcon(c.tile), null, Modifier.size(16.dp), tint = textColor) }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -119,28 +202,27 @@ fun EdgeSettingsScreen(nav: Nav) {
 
 @Composable
 fun BubbleSettingsScreen(nav: Nav) {
-    val context = LocalContext.current
     val perms = rememberToolPerms()
     val s by StudioStore.bubbleFlow.collectAsStateWithLifecycle()
     var pickSticker by remember { mutableStateOf(false) }
-    fun set(t: (com.migux97.simon.data.BubbleSettings) -> com.migux97.simon.data.BubbleSettings) = StudioStore.updateBubble(t)
+    fun set(t: (BubbleSettings) -> BubbleSettings) = StudioStore.updateBubble(t)
 
-    ToolScreen("Burbuja flotante", nav) {
+    ToolScreen("Burbuja flotante", nav, actions = {
+        StartOverButton(message = "El aspecto de la burbuja y su menú (apps, atajos y herramientas) vuelven a como venían. ¿Seguís?") {
+            set { BubbleSettings(enabled = it.enabled) }
+        }
+    }) {
         MainSwitch(
             "Mostrar la burbuja",
             "Flota sobre todas las apps. Arrastrala a donde quieras (se pega al borde), tocala para abrir tu menú y mantenela presionada para esconderla 30 segundos.",
             s.enabled
         ) { on -> set { it.copy(enabled = on) } }
-        if (!perms.access) Panel {
-            PermissionLine("Servicio de accesibilidad", "La burbuja flota sobre todo gracias a este servicio.", false) {
-                openSystem(context, Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            }
-        }
+        PermissionsPanel(listOf(accessPerm(perms, "La burbuja flota sobre todo gracias a este servicio.")))
         Box(
-            Modifier.fillMaxWidth().padding(16.dp).height(120.dp).clip(RoundedCornerShape(22.dp))
-                .background(Brush.linearGradient(listOf(Color(0xFF2A1B5C), Color(0xFF0F2027)))),
+            Modifier.fillMaxWidth().padding(16.dp).height(120.dp).clip(RoundedCornerShape(22.dp)),
             contentAlignment = Alignment.Center
         ) {
+            PhoneWallpaperBackdrop(Modifier.fillMaxSize())
             BubbleFace(s, onTap = {}, onLongPress = {}, onDrag = {}, onDragEnd = {})
         }
         ToolTitle("Aspecto")
@@ -154,6 +236,7 @@ fun BubbleSettingsScreen(nav: Nav) {
                 if (s.stickerId != null) TextButton(onClick = { set { it.copy(stickerId = null) } }) { Text("Quitar sticker") }
             }
         }
+        ToolHint("Lo que sigue aparece al tocar la burbuja.")
         QuickItemsEditor(
             s.apps, s.shortcuts, s.tools,
             onApps = { v -> set { it.copy(apps = v) } },
@@ -174,30 +257,36 @@ fun BubbleSettingsScreen(nav: Nav) {
 
 @Composable
 fun SoundsScreen(nav: Nav) {
-    val context = LocalContext.current
     val perms = rememberToolPerms()
     val s by StudioStore.soundsFlow.collectAsStateWithLifecycle()
     var editing by remember { mutableStateOf<SoundRule?>(null) }
 
-    ToolScreen("Sonidos y vibración", nav) {
+    ToolScreen("Sonidos y vibración", nav, actions = {
+        StartOverButton(message = "Se borran todas tus reglas de sonido. ¿Seguís?") {
+            StudioStore.updateSounds { it.copy(rules = emptyList()) }
+        }
+    }) {
         MainSwitch(
             "Sonidos propios",
             "Cuando llega una notificación que coincide con una regla, Simón suena y vibra a tu manera. Para que no se superponga con el sonido de siempre, silenciá esa app en los ajustes de notificaciones de Android.",
             s.enabled
         ) { on -> StudioStore.updateSounds { it.copy(enabled = on) } }
-        if (!perms.listener) Panel {
-            PermissionLine("Acceso a notificaciones", "Para saber qué app o qué contacto te escribe.", false) {
-                openSystem(context, Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-            }
-        }
+        PermissionsPanel(listOf(listenerPerm(perms, "Para saber qué app o qué contacto te escribe.")))
         Panel {
             ToggleRow("Respetar el modo silencio", s.respectSilent) { v -> StudioStore.updateSounds { it.copy(respectSilent = v) } }
             Text("En modo vibrar solo vibra; en silencio no hace nada.", style = MaterialTheme.typography.bodySmall)
         }
         ToolTitle("Reglas")
+        if (s.rules.isNotEmpty()) ToolHint("Tocá una regla para cambiarla o borrarla.")
         s.rules.forEach { r ->
             Panel(Modifier.clickable { editing = r }) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (r.packageName.isBlank()) Box(
+                        Modifier.size(36.dp).clip(CircleShape).background(MaterialTheme.colorScheme.secondaryContainer),
+                        contentAlignment = Alignment.Center
+                    ) { Icon(Icons.Filled.Apps, null, tint = MaterialTheme.colorScheme.onSecondaryContainer) }
+                    else AppIconFor(r.packageName, 36)
+                    Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text(r.name, style = MaterialTheme.typography.titleSmall)
                         Text(
@@ -214,9 +303,13 @@ fun SoundsScreen(nav: Nav) {
                 }
             }
         }
-        if (s.rules.isEmpty()) ToolHint("Ejemplo: WhatsApp + «Mamá» → un tono especial y vibración de latido.")
+        if (s.rules.isEmpty()) ToolHint("Todavía no tenés reglas. Ejemplo: WhatsApp + «Mamá» → un tono especial y vibración de latido.")
         Row(Modifier.padding(16.dp)) {
-            Button(onClick = { editing = SoundRule() }) { Text("Nueva regla") }
+            Button(onClick = { editing = SoundRule() }) {
+                Icon(Icons.Filled.Add, null)
+                Spacer(Modifier.width(6.dp))
+                Text("Nueva regla")
+            }
         }
     }
 
@@ -235,6 +328,8 @@ private fun SoundRuleDialog(original: SoundRule, onDismiss: () -> Unit) {
     val context = LocalContext.current
     var r by remember(original.id) { mutableStateOf(original) }
     var pickApp by remember { mutableStateOf(false) }
+    var askDelete by remember { mutableStateOf(false) }
+    val isSaved = StudioStore.soundSettings.rules.any { it.id == original.id }
 
     val ringtone = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         if (res.resultCode == Activity.RESULT_OK) {
@@ -253,13 +348,25 @@ private fun SoundRuleDialog(original: SoundRule, onDismiss: () -> Unit) {
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Regla de sonido") },
+        title = { Text(if (isSaved) "Editar regla" else "Nueva regla") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(r.name, { r = r.copy(name = it) }, label = { Text("Nombre") }, singleLine = true)
                 Text("App", style = MaterialTheme.typography.titleSmall)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (r.packageName.isBlank()) Box(
+                        Modifier.size(36.dp).clip(CircleShape).background(MaterialTheme.colorScheme.secondaryContainer),
+                        contentAlignment = Alignment.Center
+                    ) { Icon(Icons.Filled.Apps, null, tint = MaterialTheme.colorScheme.onSecondaryContainer) }
+                    else AppIconFor(r.packageName, 36)
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        if (r.packageName.isBlank()) "Todas las apps" else appNameForPackage(r.packageName),
+                        Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis
+                    )
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { pickApp = true }) { Text(if (r.packageName.isBlank()) "Todas" else appNameForPackage(r.packageName)) }
+                    OutlinedButton(onClick = { pickApp = true }) { Text(if (r.packageName.isBlank()) "Elegir una app" else "Cambiar app") }
                     if (r.packageName.isNotBlank()) TextButton(onClick = { r = r.copy(packageName = "") }) { Text("Todas") }
                 }
                 OutlinedTextField(
@@ -277,34 +384,40 @@ private fun SoundRuleDialog(original: SoundRule, onDismiss: () -> Unit) {
                             .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, false)
                             .putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, r.soundUri?.let { Uri.parse(it) })
                         try { ringtone.launch(i) } catch (_: Exception) {}
-                    }) { Text("Tono") }
+                    }) { Text("Tono del teléfono") }
                     FilledTonalButton(onClick = { audioFile.launch(arrayOf("audio/*")) }) { Text("Archivo") }
                 }
                 LabeledSlider("Volumen", r.volume, 0.1f..1f, "${(r.volume * 100).roundToInt()}%") { r = r.copy(volume = it) }
                 Text("Vibración", style = MaterialTheme.typography.titleSmall)
                 ChoiceChips(VibePattern.entries, r.vibration, { it.label }, { r = r.copy(vibration = it) })
-                TextButton(onClick = {
+                OutlinedButton(onClick = {
                     r.soundUri?.let { SoundPlayer.play(context, it, r.volume) }
                     SoundPlayer.vibrate(context, r.vibration)
-                }) { Text("Probar") }
+                }) { Text("Escuchar cómo suena") }
+                if (isSaved) TextButton(onClick = { askDelete = true }) { Text("Borrar esta regla", color = MaterialTheme.colorScheme.error) }
             }
         },
         confirmButton = {
             TextButton(onClick = { saveRule(r); onDismiss() }) { Text("Guardar") }
         },
         dismissButton = {
-            Row {
-                if (StudioStore.soundSettings.rules.any { it.id == r.id }) TextButton(onClick = {
-                    StudioStore.updateSounds { s -> s.copy(rules = s.rules.filterNot { it.id == r.id }) }
-                    onDismiss()
-                }) { Text("Borrar") }
-                TextButton(onClick = onDismiss) { Text("Cancelar") }
-            }
+            TextButton(onClick = onDismiss) { Text("Cancelar") }
         }
     )
     if (pickApp) AppPickDialog(onDismiss = { pickApp = false }) { app ->
         r = r.copy(packageName = app.packageName, name = if (r.name == "Nueva regla") app.label else r.name)
     }
+    if (askDelete) ConfirmDialog(
+        title = "¿Borrar «${r.name}»?",
+        message = "Esta regla deja de sonar. No se puede deshacer.",
+        confirm = "Borrar",
+        onDismiss = { askDelete = false },
+        onConfirm = {
+            askDelete = false
+            StudioStore.updateSounds { s -> s.copy(rules = s.rules.filterNot { it.id == original.id }) }
+            onDismiss()
+        }
+    )
 }
 
 // ======================================================================

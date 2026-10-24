@@ -11,6 +11,7 @@ import android.graphics.Path
 import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
+import com.migux97.simon.data.AppliedWallpaper
 import com.migux97.simon.data.StaticPattern
 import com.migux97.simon.data.StaticWallpaper
 import com.migux97.simon.widget.Draw
@@ -170,7 +171,14 @@ object StaticWallpapers {
     }
 
     /** Pone un bitmap como fondo de pantalla. */
-    fun apply(context: Context, bitmap: Bitmap, target: WallpaperTarget): Boolean = try {
+    fun apply(context: Context, bitmap: Bitmap, target: WallpaperTarget): Boolean =
+        applyTracked(context, bitmap, target) != null
+
+    /**
+     * Pone un bitmap como fondo y devuelve los ids que le dio Android
+     * (inicio, bloqueo) para poder saber después si sigue puesto. null si falló.
+     */
+    fun applyTracked(context: Context, bitmap: Bitmap, target: WallpaperTarget): Pair<Int, Int>? = try {
         val wm = WallpaperManager.getInstance(context)
         val flags = when (target) {
             WallpaperTarget.HOME -> WallpaperManager.FLAG_SYSTEM
@@ -178,10 +186,53 @@ object StaticWallpapers {
             WallpaperTarget.BOTH -> WallpaperManager.FLAG_SYSTEM or WallpaperManager.FLAG_LOCK
         }
         wm.setBitmap(bitmap, null, true, flags)
-        true
+        val home = if (target != WallpaperTarget.LOCK) wallpaperId(wm, WallpaperManager.FLAG_SYSTEM) else 0
+        val lock = if (target != WallpaperTarget.HOME) wallpaperId(wm, WallpaperManager.FLAG_LOCK) else 0
+        home to lock
     } catch (e: Exception) {
-        false
+        null
     }
+
+    private fun wallpaperId(wm: WallpaperManager, which: Int): Int = try {
+        wm.getWallpaperId(which)
+    } catch (e: Exception) {
+        0
+    }
+
+    /** Pantalla donde quedó un fondo anotado por Simón. */
+    fun targetOf(applied: AppliedWallpaper): WallpaperTarget =
+        WallpaperTarget.entries.firstOrNull { it.name == applied.target } ?: WallpaperTarget.BOTH
+
+    /**
+     * ¿Sigue puesto el fondo que anotó Simón? Compara los ids de Android; si no
+     * se pueden leer, confía en lo anotado. Un fondo animado en inicio lo tapa.
+     */
+    fun isStillApplied(context: Context, applied: AppliedWallpaper?): Boolean {
+        if (applied == null) return false
+        return try {
+            val wm = WallpaperManager.getInstance(context)
+            when (targetOf(applied)) {
+                WallpaperTarget.LOCK -> {
+                    val now = wallpaperId(wm, WallpaperManager.FLAG_LOCK)
+                    applied.lockId <= 0 || now <= 0 || now == applied.lockId
+                }
+                WallpaperTarget.HOME, WallpaperTarget.BOTH -> {
+                    if (wm.wallpaperInfo != null) {
+                        false
+                    } else {
+                        val now = wallpaperId(wm, WallpaperManager.FLAG_SYSTEM)
+                        applied.homeId <= 0 || now <= 0 || now == applied.homeId
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            true
+        }
+    }
+
+    /** ¿Lo anotado está en la pantalla de inicio ahora mismo? */
+    fun isOnHomeNow(context: Context, applied: AppliedWallpaper?): Boolean =
+        applied != null && targetOf(applied) != WallpaperTarget.LOCK && isStillApplied(context, applied)
 
     /** Tamaño ideal para generar el fondo (pantalla completa). */
     fun screenSize(context: Context): Pair<Int, Int> {

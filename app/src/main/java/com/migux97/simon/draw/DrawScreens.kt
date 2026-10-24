@@ -2,6 +2,7 @@ package com.migux97.simon.draw
 
 import android.graphics.Bitmap
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -9,6 +10,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,10 +32,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Pause
@@ -80,8 +83,10 @@ import com.migux97.simon.ui.Nav
 import com.migux97.simon.ui.components.BackTopBar
 import com.migux97.simon.ui.components.ChoiceChips
 import com.migux97.simon.ui.components.ColorPickerDialog
+import com.migux97.simon.ui.components.ConfirmDialog
 import com.migux97.simon.ui.components.LabeledSlider
 import com.migux97.simon.ui.components.QuickColors
+import com.migux97.simon.ui.components.UnsavedChangesDialog
 import com.migux97.simon.ui.screens.TargetDialog
 import com.migux97.simon.wallpaper.LiveWallpaper
 import com.migux97.simon.wallpaper.StaticWallpapers
@@ -89,6 +94,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
 import kotlin.math.roundToInt
 
 private data class CanvasFormat(val label: String, val w: Int, val h: Int)
@@ -141,6 +148,9 @@ private fun ToolPanel(
 
 // ================================================================= dibujo
 
+/** Capa de trazos sin fondo, guardada al lado del dibujo para poder seguir editándolo. */
+private fun layerFile(id: String) = File(MediaLibrary.drawingFile(id).parentFile, "$id.layer.png")
+
 @Composable
 fun DrawingScreen(nav: Nav, drawingId: String) {
     val context = LocalContext.current
@@ -148,9 +158,7 @@ fun DrawingScreen(nav: Nav, drawingId: String) {
     val existing = remember(drawingId) { StudioStore.drawing(drawingId) }
     var format by remember { mutableStateOf(existing?.let { CanvasFormat("", it.width, it.height) } ?: drawingFormats[0]) }
     var name by remember { mutableStateOf(existing?.name ?: "Mi dibujo") }
-    val base by androidx.compose.runtime.produceState<Bitmap?>(null, drawingId) {
-        value = if (existing != null) withContext(Dispatchers.IO) { MediaLibrary.loadDrawing(existing.id, 2200) } else null
-    }
+    var base by remember { mutableStateOf<Bitmap?>(null) }
     val strokes = remember { mutableStateListOf<Stroke>() }
     val redo = remember { mutableStateListOf<Stroke>() }
     var current by remember { mutableStateOf<Stroke?>(null) }
@@ -159,28 +167,82 @@ fun DrawingScreen(nav: Nav, drawingId: String) {
     var width by remember { mutableFloatStateOf(0.012f) }
     var alpha by remember { mutableFloatStateOf(1f) }
     var filled by remember { mutableStateOf(false) }
-    var bgColor by remember { mutableStateOf<Int?>(null) }
+    var bgColor by remember { mutableStateOf(existing?.takeIf { it.hasLayer }?.bgColor) }
+    var bgImagePath by remember { mutableStateOf(existing?.takeIf { it.hasLayer }?.bgImagePath) }
     var bgImage by remember { mutableStateOf<Bitmap?>(null) }
     var savedId by remember { mutableStateOf(existing?.id) }
     var wallpaperDialog by remember { mutableStateOf(false) }
+    var clearDialog by remember { mutableStateOf(false) }
+    var askLeave by remember { mutableStateOf(false) }
+    var dirty by remember { mutableStateOf(false) }
+
+    // Al reabrir: la capa de trazos sola + el fondo que tenía. Los dibujos viejos
+    // (sin capa guardada) se abren como imagen única, con fondo transparente.
+    LaunchedEffect(drawingId) {
+        if (existing != null) {
+            val loaded: Pair<Bitmap?, Boolean> = withContext(Dispatchers.IO) {
+                val lf = layerFile(existing.id)
+                val layer = if (existing.hasLayer && lf.exists()) ImageStore.load(lf.absolutePath, 2200) else null
+                if (layer != null) layer to true else MediaLibrary.loadDrawing(existing.id, 2200) to false
+            }
+            base = loaded.first
+            if (!loaded.second) {
+                bgColor = null
+                bgImagePath = null
+            }
+            val path = bgImagePath
+            bgImage = if (path != null) withContext(Dispatchers.IO) { ImageStore.load(path, 2200) } else null
+        }
+    }
 
     val photo = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) scope.launch { bgImage = withContext(Dispatchers.IO) { ImageStore.decodeUri(context, uri, 2200) } }
+        if (uri != null) scope.launch {
+            val path = withContext(Dispatchers.IO) { ImageStore.importImage(context, uri, 2200) }
+            val bmp = if (path != null) withContext(Dispatchers.IO) { ImageStore.load(path, 2200) } else null
+            if (path != null && bmp != null) {
+                bgImagePath = path
+                bgImage = bmp
+                bgColor = null
+                dirty = true
+            } else Toast.makeText(context, "No se pudo abrir la foto", Toast.LENGTH_SHORT).show()
+        }
     }
 
     suspend fun save(): DrawingInfo {
-        val info = (existing ?: DrawingInfo(name = name, width = format.w, height = format.h)).copy(id = savedId ?: existing?.id ?: com.migux97.simon.data.newId(), name = name, width = format.w, height = format.h)
-        val bmp = withContext(Dispatchers.Default) { DrawCore.toBitmap(format.w, format.h, bgColor, bgImage, base, strokes.toList()) }
-        withContext(Dispatchers.IO) { MediaLibrary.saveDrawing(info, bmp) }
-        savedId = info.id
+        val id = savedId ?: existing?.id ?: com.migux97.simon.data.newId()
+        val info = (existing ?: DrawingInfo(name = name, width = format.w, height = format.h)).copy(
+            id = id, name = name, width = format.w, height = format.h,
+            bgColor = bgColor, bgImagePath = if (bgImage != null) bgImagePath else null, hasLayer = true
+        )
+        val w = format.w
+        val h = format.h
+        val bc = bgColor
+        val bi = bgImage
+        val b = base
+        val list = strokes.toList()
+        val flat = withContext(Dispatchers.Default) { DrawCore.toBitmap(w, h, bc, bi, b, list) }
+        val layer = withContext(Dispatchers.Default) { DrawCore.toBitmap(w, h, null, null, b, list) }
+        withContext(Dispatchers.IO) {
+            val lf = layerFile(id)
+            FileOutputStream(lf).use { layer.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            ImageStore.evict(lf.absolutePath)
+            MediaLibrary.saveDrawing(info, flat)
+        }
+        savedId = id
+        dirty = false
         return info
     }
 
+    fun leave() {
+        if (dirty) askLeave = true else nav.back()
+    }
+
+    BackHandler(enabled = dirty) { askLeave = true }
+
     Column(Modifier.fillMaxSize()) {
-        BackTopBar(name, onBack = { nav.back() }) {
-            IconButton(onClick = { strokes.removeLastOrNull()?.let { redo.add(it) } }, enabled = strokes.isNotEmpty()) { Icon(Icons.AutoMirrored.Filled.Undo, "Deshacer") }
-            IconButton(onClick = { redo.removeLastOrNull()?.let { strokes.add(it) } }, enabled = redo.isNotEmpty()) { Icon(Icons.AutoMirrored.Filled.Redo, "Rehacer") }
-            IconButton(onClick = { scope.launch { save(); Toast.makeText(context, "Dibujo guardado", Toast.LENGTH_SHORT).show() } }) { Icon(Icons.Filled.Check, "Guardar") }
+        BackTopBar(name, onBack = { leave() }) {
+            IconButton(onClick = { strokes.removeLastOrNull()?.let { redo.add(it); dirty = true } }, enabled = strokes.isNotEmpty()) { Icon(Icons.AutoMirrored.Filled.Undo, "Deshacer") }
+            IconButton(onClick = { redo.removeLastOrNull()?.let { strokes.add(it); dirty = true } }, enabled = redo.isNotEmpty()) { Icon(Icons.AutoMirrored.Filled.Redo, "Rehacer") }
         }
         Box(
             Modifier.fillMaxWidth().weight(1f).padding(12.dp),
@@ -189,7 +251,7 @@ fun DrawingScreen(nav: Nav, drawingId: String) {
             DrawingSurface(
                 strokes = strokes, base = base, bgColor = bgColor, bgImage = bgImage, onion = null,
                 tool = tool, color = color, width = width, alpha = alpha, filled = filled,
-                current = current, onCurrent = { current = it }, onStroke = { strokes.add(it); redo.clear() },
+                current = current, onCurrent = { current = it }, onStroke = { strokes.add(it); redo.clear(); dirty = true },
                 modifier = Modifier
                     .aspectRatio(format.w.toFloat() / format.h)
                     .clip(RoundedCornerShape(12.dp))
@@ -199,19 +261,27 @@ fun DrawingScreen(nav: Nav, drawingId: String) {
         }
         Column(Modifier.weight(0.9f).verticalScroll(rememberScrollState())) {
             ToolPanel(tool, { tool = it }, color, { color = it }, width, { width = it }, alpha, { alpha = it }, filled, { filled = it })
-            if (existing == null && strokes.isEmpty()) {
+            if (existing == null && strokes.isEmpty() && base == null) {
                 Text("Formato", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 16.dp, top = 8.dp))
                 ChoiceChips(drawingFormats, format, { it.label }, { format = it })
             }
             Text("Fondo", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 16.dp, top = 8.dp))
             Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(bgColor == null && bgImage == null, { bgColor = null; bgImage = null }, label = { Text("Transparente") })
-                FilterChip(bgColor != null, { bgColor = color; bgImage = null }, label = { Text("Color actual") })
-                FilterChip(bgImage != null, { photo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, label = { Text("Foto") })
+                FilterChip(bgColor == null && bgImage == null, {
+                    bgColor = null; bgImage = null; bgImagePath = null; dirty = true
+                }, label = { Text("Transparente") })
+                FilterChip(bgColor != null, {
+                    bgColor = color; bgImage = null; bgImagePath = null; dirty = true
+                }, label = { Text("Color del pincel") })
+                FilterChip(bgImage != null, { photo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, label = { Text(if (bgImage != null) "Cambiar foto" else "Foto") })
             }
-            OutlinedTextField(name, { name = it.take(30) }, label = { Text("Nombre") }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(16.dp))
+            OutlinedTextField(name, { name = it.take(30); dirty = true }, label = { Text("Nombre") }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(16.dp))
             Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { strokes.clear(); redo.clear() }) { Text("Borrar trazos") }
+                OutlinedButton(onClick = { clearDialog = true }) {
+                    Icon(Icons.Filled.Delete, null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Borrar…")
+                }
             }
             Spacer(Modifier.height(12.dp))
         }
@@ -228,6 +298,56 @@ fun DrawingScreen(nav: Nav, drawingId: String) {
             }
         }
     }
+
+    if (clearDialog) AlertDialog(
+        onDismissRequest = { clearDialog = false },
+        title = { Text("¿Qué querés borrar?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(enabled = strokes.isNotEmpty(), onClick = {
+                    redo.clear()
+                    strokes.clear()
+                    dirty = true
+                    clearDialog = false
+                }, modifier = Modifier.fillMaxWidth()) { Text("Solo los trazos de ahora") }
+                Text(
+                    "Deja lo que ya estaba guardado y borra lo que dibujaste desde que abriste.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Button(onClick = {
+                    redo.clear()
+                    strokes.clear()
+                    base = null
+                    bgColor = null
+                    bgImage = null
+                    bgImagePath = null
+                    dirty = true
+                    clearDialog = false
+                }, modifier = Modifier.fillMaxWidth()) { Text("Empezar de cero (lienzo vacío)") }
+                Text(
+                    "Borra todo el dibujo y el fondo. Hasta que toques «Guardar» no se pierde nada.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { clearDialog = false }) { Text("Cancelar") } }
+    )
+
+    if (askLeave) UnsavedChangesDialog(
+        onSave = {
+            askLeave = false
+            scope.launch {
+                save()
+                nav.back()
+            }
+        },
+        onDiscard = {
+            askLeave = false
+            dirty = false
+            nav.back()
+        },
+        onDismiss = { askLeave = false }
+    )
 
     if (wallpaperDialog) TargetDialog("Usar como fondo de pantalla", onDismiss = { wallpaperDialog = false }) { target ->
         wallpaperDialog = false
@@ -265,6 +385,7 @@ fun AnimationScreen(nav: Nav, animationId: String) {
     }
     var index by remember { mutableIntStateOf(0) }
     var current by remember { mutableStateOf<Stroke?>(null) }
+    val redo = remember { mutableStateListOf<Stroke>() }
     var tool by remember { mutableStateOf(Tool.PEN) }
     var color by remember { mutableIntStateOf(0xFFFF4F81.toInt()) }
     var width by remember { mutableFloatStateOf(0.015f) }
@@ -276,11 +397,33 @@ fun AnimationScreen(nav: Nav, animationId: String) {
     var bgColor by remember { mutableStateOf<Int?>(null) }
     var savedId by remember { mutableStateOf(existing?.id) }
     var applyDialog by remember { mutableStateOf(false) }
+    var askLeave by remember { mutableStateOf(false) }
+    var askDeleteFrame by remember { mutableStateOf(false) }
+    var dirty by remember { mutableStateOf(false) }
 
     fun frameBitmap(i: Int, w: Int = size, h: Int = sizeH, withBg: Boolean = true): Bitmap =
         DrawCore.toBitmap(w, h, if (withBg) bgColor else null, null, bases.getOrNull(i), frames.getOrNull(i) ?: emptyList())
 
-    val onion: Bitmap? = if (onionOn && index > 0 && loaded && !playing) remember(index, frames.getOrNull(index - 1)) { frameBitmap(index - 1, 360, (360f * sizeH / size).toInt()) } else null
+    fun select(i: Int) {
+        if (i != index) redo.clear()
+        index = i
+        playing = false
+    }
+
+    /** Mueve el cuadro actual una posición (−1 antes, +1 después). */
+    fun moveFrame(delta: Int) {
+        val to = index + delta
+        if (to !in frames.indices) return
+        val f = frames.removeAt(index)
+        frames.add(to, f)
+        val b = bases.removeAt(index)
+        bases.add(to, b)
+        index = to
+        redo.clear()
+        dirty = true
+    }
+
+    val onion: Bitmap? = if (onionOn && index > 0 && loaded && !playing) remember(index, frames.getOrNull(index - 1), bases.getOrNull(index - 1)) { frameBitmap(index - 1, 360, (360f * sizeH / size).toInt()) } else null
     var preview by remember { mutableStateOf<List<Bitmap>>(emptyList()) }
 
     LaunchedEffect(playing) {
@@ -301,19 +444,35 @@ fun AnimationScreen(nav: Nav, animationId: String) {
         val bitmaps = withContext(Dispatchers.Default) { frames.indices.map { frameBitmap(it) } }
         withContext(Dispatchers.IO) { MediaLibrary.saveAnimation(info, bitmaps) }
         savedId = id
+        dirty = false
         return info
     }
 
+    fun leave() {
+        if (dirty) askLeave = true else nav.back()
+    }
+
+    BackHandler(enabled = dirty) { askLeave = true }
+
     Column(Modifier.fillMaxSize()) {
-        BackTopBar(name, onBack = { nav.back() }) {
+        BackTopBar(name, onBack = { leave() }) {
             IconButton(onClick = {
                 if (index < frames.size) {
                     val list = frames[index]
-                    if (list.isNotEmpty()) frames[index] = list.dropLast(1)
+                    if (list.isNotEmpty()) {
+                        redo.add(list.last())
+                        frames[index] = list.dropLast(1)
+                        dirty = true
+                    }
                 }
-            }) { Icon(Icons.AutoMirrored.Filled.Undo, "Deshacer") }
-            IconButton(onClick = { playing = !playing }) { Icon(if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow, "Reproducir") }
-            IconButton(onClick = { scope.launch { save(); Toast.makeText(context, "Animación guardada", Toast.LENGTH_SHORT).show() } }) { Icon(Icons.Filled.Check, "Guardar") }
+            }, enabled = !playing && (frames.getOrNull(index)?.isNotEmpty() == true)) { Icon(Icons.AutoMirrored.Filled.Undo, "Deshacer") }
+            IconButton(onClick = {
+                if (index < frames.size) redo.removeLastOrNull()?.let { s ->
+                    frames[index] = frames[index] + s
+                    dirty = true
+                }
+            }, enabled = !playing && redo.isNotEmpty()) { Icon(Icons.AutoMirrored.Filled.Redo, "Rehacer") }
+            IconButton(onClick = { playing = !playing }) { Icon(if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow, if (playing) "Pausar" else "Reproducir") }
         }
         Box(Modifier.fillMaxWidth().weight(1f).padding(12.dp), contentAlignment = Alignment.Center) {
             if (playing) {
@@ -324,7 +483,8 @@ fun AnimationScreen(nav: Nav, animationId: String) {
                 DrawingSurface(
                     strokes = frames[index], base = bases.getOrNull(index), bgColor = bgColor, bgImage = null, onion = onion,
                     tool = tool, color = color, width = width, alpha = alpha, filled = filled,
-                    current = current, onCurrent = { current = it }, onStroke = { s -> frames[index] = frames[index] + s },
+                    current = current, onCurrent = { current = it },
+                    onStroke = { s -> frames[index] = frames[index] + s; redo.clear(); dirty = true },
                     modifier = Modifier
                         .aspectRatio(size.toFloat() / sizeH)
                         .clip(RoundedCornerShape(12.dp))
@@ -333,39 +493,49 @@ fun AnimationScreen(nav: Nav, animationId: String) {
             }
         }
         // Tira de cuadros
-        Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            LazyRow(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                itemsIndexed(frames.toList()) { i, _ ->
-                    Box(
-                        Modifier.size(46.dp).clip(RoundedCornerShape(10.dp))
-                            .background(if (i == index) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh)
-                            .clickable { index = i; playing = false },
-                        contentAlignment = Alignment.Center
-                    ) { Text("${i + 1}", color = if (i == index) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface) }
-                }
+        LazyRow(Modifier.fillMaxWidth(), contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            itemsIndexed(frames.toList()) { i, _ ->
+                Box(
+                    Modifier.size(46.dp).clip(RoundedCornerShape(10.dp))
+                        .background(if (i == index) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .clickable { select(i) },
+                    contentAlignment = Alignment.Center
+                ) { Text("${i + 1}", color = if (i == index) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface) }
             }
-            IconButton(onClick = {
-                if (frames.size < 60) { frames.add(index + 1, emptyList()); bases.add(index + 1, null); index++ }
-            }) { Icon(Icons.Filled.Add, "Cuadro nuevo") }
-            IconButton(onClick = {
-                if (frames.size < 60) { frames.add(index + 1, frames[index]); bases.add(index + 1, bases[index]); index++ }
-            }) { Icon(Icons.Filled.ContentCopy, "Duplicar cuadro") }
-            IconButton(onClick = {
-                if (frames.size > 1) { frames.removeAt(index); bases.removeAt(index); index = index.coerceAtMost(frames.lastIndex) }
-            }) { Icon(Icons.Filled.Delete, "Borrar cuadro") }
+        }
+        // Acciones sobre el cuadro elegido
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(enabled = loaded && frames.size < 60, onClick = {
+                frames.add(index + 1, emptyList()); bases.add(index + 1, null); select(index + 1); dirty = true
+            }) { Icon(Icons.Filled.Add, null); Spacer(Modifier.width(4.dp)); Text("Nuevo") }
+            TextButton(enabled = loaded && frames.size < 60 && index < frames.size, onClick = {
+                frames.add(index + 1, frames[index]); bases.add(index + 1, bases[index]); select(index + 1); dirty = true
+            }) { Icon(Icons.Filled.ContentCopy, null); Spacer(Modifier.width(4.dp)); Text("Duplicar") }
+            TextButton(enabled = index > 0, onClick = { moveFrame(-1) }) {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, null); Text("Mover antes")
+            }
+            TextButton(enabled = index < frames.lastIndex, onClick = { moveFrame(1) }) {
+                Text("Mover después"); Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null)
+            }
+            TextButton(enabled = frames.size > 1, onClick = { askDeleteFrame = true }) {
+                Icon(Icons.Filled.Delete, null); Spacer(Modifier.width(4.dp)); Text("Borrar")
+            }
         }
         Column(Modifier.weight(0.85f).verticalScroll(rememberScrollState())) {
             ToolPanel(tool, { tool = it }, color, { color = it }, width, { width = it }, alpha, { alpha = it }, filled, { filled = it })
             Column(Modifier.padding(horizontal = 16.dp)) {
-                LabeledSlider("Velocidad", fps.toFloat(), 1f..30f, "$fps cuadros/seg") { fps = it.roundToInt() }
+                LabeledSlider("Velocidad", fps.toFloat(), 1f..30f, "$fps cuadros/seg") { fps = it.roundToInt(); dirty = true }
                 Row(verticalAlignment = Alignment.CenterVertically) { Text("Ver cuadro anterior (papel cebolla)", Modifier.weight(1f)); Switch(onionOn, { onionOn = it }) }
-                Row(verticalAlignment = Alignment.CenterVertically) { Text("Repetir en bucle", Modifier.weight(1f)); Switch(loop, { loop = it }) }
-                Row(verticalAlignment = Alignment.CenterVertically) { Text("Ida y vuelta", Modifier.weight(1f)); Switch(bounce, { bounce = it }) }
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("Repetir en bucle", Modifier.weight(1f)); Switch(loop, { loop = it; dirty = true }) }
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("Ida y vuelta", Modifier.weight(1f)); Switch(bounce, { bounce = it; dirty = true }) }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(bgColor == null, { bgColor = null }, label = { Text("Fondo transparente") })
-                    FilterChip(bgColor != null, { bgColor = color }, label = { Text("Fondo de color") })
+                    FilterChip(bgColor == null, { bgColor = null; dirty = true }, label = { Text("Fondo transparente") })
+                    FilterChip(bgColor != null, { bgColor = color; dirty = true }, label = { Text("Fondo de color") })
                 }
-                OutlinedTextField(name, { name = it.take(30) }, label = { Text("Nombre") }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp))
+                OutlinedTextField(name, { name = it.take(30); dirty = true }, label = { Text("Nombre") }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp))
             }
         }
         Surface(tonalElevation = 3.dp) {
@@ -381,6 +551,39 @@ fun AnimationScreen(nav: Nav, animationId: String) {
             }
         }
     }
+
+    if (askDeleteFrame) ConfirmDialog(
+        title = "¿Borrar el cuadro ${index + 1}?",
+        message = "Se quita este cuadro de la animación.",
+        confirm = "Borrar",
+        onDismiss = { askDeleteFrame = false },
+        onConfirm = {
+            askDeleteFrame = false
+            if (frames.size > 1 && index < frames.size) {
+                frames.removeAt(index)
+                bases.removeAt(index)
+                redo.clear()
+                index = index.coerceAtMost(frames.lastIndex)
+                dirty = true
+            }
+        }
+    )
+
+    if (askLeave) UnsavedChangesDialog(
+        onSave = {
+            askLeave = false
+            scope.launch {
+                save()
+                nav.back()
+            }
+        },
+        onDiscard = {
+            askLeave = false
+            dirty = false
+            nav.back()
+        },
+        onDismiss = { askLeave = false }
+    )
 
     if (applyDialog) AlertDialog(
         onDismissRequest = { applyDialog = false },

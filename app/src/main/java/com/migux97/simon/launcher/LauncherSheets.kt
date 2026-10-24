@@ -2,6 +2,7 @@ package com.migux97.simon.launcher
 
 import android.appwidget.AppWidgetProviderInfo
 import android.content.Intent
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -9,6 +10,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,7 +38,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -186,15 +190,30 @@ fun FolderOverlay(folder: HomeItem, settings: LauncherSettings, ui: LauncherUi) 
         Column(
             Modifier
                 .padding(28.dp)
+                .fillMaxWidth()
                 .clip(RoundedCornerShape(30.dp))
                 .background(Color(folder.folderColor).copy(alpha = 0.92f))
                 .clickable(enabled = false) { }
                 .padding(20.dp)
         ) {
-            Text(folder.title.ifBlank { "Carpeta" }, color = Color.White, style = MaterialTheme.typography.titleLarge)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    folder.title.ifBlank { "Carpeta" }, color = Color.White, style = MaterialTheme.typography.titleLarge,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = {
+                    val current = StudioStore.items.firstOrNull { it.id == folder.id } ?: folder
+                    ui.openFolder = null
+                    ui.editItem = current
+                }) {
+                    Icon(Icons.Filled.Edit, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Editar carpeta", color = Color.White)
+                }
+            }
             Spacer(Modifier.height(12.dp))
             val apps = folder.folderApps.mapNotNull { AppCatalog.find(it) }
-            if (apps.isEmpty()) Text("Carpeta vacía: editala para agregar apps.", color = Color.White)
+            if (apps.isEmpty()) Text("Carpeta vacía. Tocá «Editar carpeta» para agregar apps.", color = Color.White)
             apps.chunked(4).forEach { row ->
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(vertical = 6.dp)) {
                     row.forEach { app ->
@@ -237,6 +256,7 @@ fun AddSheet(ui: LauncherUi, settings: LauncherSettings, page: Int, onPickSystem
     val apps by AppCatalog.apps.collectAsStateWithLifecycle()
 
     fun add(item: HomeItem) {
+        ui.snapshot()
         StudioStore.upsertItem(item.copy(page = page, z = StudioStore.maxZ(page) + 1))
         ui.addSheet = false
         ui.selectedId = item.id
@@ -264,12 +284,18 @@ fun AddSheet(ui: LauncherUi, settings: LauncherSettings, page: Int, onPickSystem
     }
     ModalBottomSheet(onDismissRequest = { ui.addSheet = false }, sheetState = sheet) {
         when (mode) {
-            AddMode.APPS -> AppPickerList(apps) { app ->
-                add(LauncherLayout.appItem(app.key, page, settings))
+            AddMode.APPS -> Column {
+                TextButton(onClick = { mode = AddMode.MAIN }, modifier = Modifier.padding(start = 8.dp)) { Text("← Volver") }
+                AppPickerList(apps) { app ->
+                    add(LauncherLayout.appItem(app.key, page, settings))
+                }
             }
-            AddMode.SYSTEM -> SystemWidgetList { info ->
-                ui.addSheet = false
-                onPickSystemWidget(info, page)
+            AddMode.SYSTEM -> Column {
+                TextButton(onClick = { mode = AddMode.MAIN }, modifier = Modifier.padding(start = 8.dp)) { Text("← Volver") }
+                SystemWidgetList { info ->
+                    ui.addSheet = false
+                    onPickSystemWidget(info, page)
+                }
             }
             AddMode.MAIN -> Column(
                 Modifier
@@ -295,6 +321,8 @@ fun AddSheet(ui: LauncherUi, settings: LauncherSettings, page: Int, onPickSystem
                         StudioStore.saveWidget(text)
                         val (x, y) = box(0.8f, 0.12f)
                         add(HomeItem(type = ItemType.CUSTOM_WIDGET, x = x, y = y, w = 0.8f, h = 0.12f, customWidgetId = text.id))
+                        // Se abre el editor para escribir el texto enseguida.
+                        ui.editItem = StudioStore.items.lastOrNull()
                     }) { Text("Texto") }
                 }
                 Section("Widgets que creaste")
@@ -342,31 +370,29 @@ fun AddSheet(ui: LauncherUi, settings: LauncherSettings, page: Int, onPickSystem
                     FilledTonalButton(onClick = { videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) }) { Text("Video") }
                     FilledTonalButton(onClick = { pickSticker = true }) { Text("Sticker") }
                 }
-                if (drawings.isNotEmpty()) {
-                    Section("Mis dibujos")
-                    LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        items(drawings, key = { it.id }) { d ->
-                            val bmp by produceState<android.graphics.Bitmap?>(null, d.id, d.updatedAt) { value = withContext(Dispatchers.IO) { MediaLibrary.loadDrawing(d.id, 300) } }
-                            Box(
-                                Modifier.size(80.dp).clip(RoundedCornerShape(14.dp)).background(Color(0x22FFFFFF)).clickable {
-                                    val (x, y) = box(0.4f, 0.2f)
-                                    add(HomeItem(type = ItemType.STICKER, x = x, y = y, w = 0.4f, h = 0.2f, stickerSource = StickerSource.DRAWING, mediaId = d.id))
-                                }
-                            ) { bmp?.let { Image(it.asImageBitmap(), d.name, Modifier.fillMaxSize()) } }
-                        }
+                Section("Mis dibujos")
+                if (drawings.isEmpty()) Hint("Todavía no tenés dibujos. Creá uno en Crear → Dibujo.")
+                else LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    items(drawings, key = { it.id }) { d ->
+                        val bmp by produceState<android.graphics.Bitmap?>(null, d.id, d.updatedAt) { value = withContext(Dispatchers.IO) { MediaLibrary.loadDrawing(d.id, 300) } }
+                        Box(
+                            Modifier.size(80.dp).clip(RoundedCornerShape(14.dp)).background(Color(0x22FFFFFF)).clickable {
+                                val (x, y) = box(0.4f, 0.2f)
+                                add(HomeItem(type = ItemType.STICKER, x = x, y = y, w = 0.4f, h = 0.2f, stickerSource = StickerSource.DRAWING, mediaId = d.id))
+                            }
+                        ) { bmp?.let { Image(it.asImageBitmap(), d.name, Modifier.fillMaxSize()) } }
                     }
                 }
-                if (animations.isNotEmpty()) {
-                    Section("Mis animaciones")
-                    LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        items(animations, key = { it.id }) { a ->
-                            Box(
-                                Modifier.size(80.dp).clip(RoundedCornerShape(14.dp)).background(Color(0x22FFFFFF)).clickable {
-                                    val (x, y) = box(0.4f, 0.2f)
-                                    add(HomeItem(type = ItemType.STICKER, x = x, y = y, w = 0.4f, h = 0.2f, stickerSource = StickerSource.ANIMATION, mediaId = a.id))
-                                }
-                            ) { AnimatedFrames(a.id, Modifier.fillMaxSize()) }
-                        }
+                Section("Mis animaciones")
+                if (animations.isEmpty()) Hint("Todavía no tenés animaciones. Creá una en Crear → Animación.")
+                else LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    items(animations, key = { it.id }) { a ->
+                        Box(
+                            Modifier.size(80.dp).clip(RoundedCornerShape(14.dp)).background(Color(0x22FFFFFF)).clickable {
+                                val (x, y) = box(0.4f, 0.2f)
+                                add(HomeItem(type = ItemType.STICKER, x = x, y = y, w = 0.4f, h = 0.2f, stickerSource = StickerSource.ANIMATION, mediaId = a.id))
+                            }
+                        ) { AnimatedFrames(a.id, Modifier.fillMaxSize()) }
                     }
                 }
                 Section("Escenas animadas")
@@ -414,12 +440,15 @@ fun AppPickerList(apps: List<LaunchApp>, onPick: (LaunchApp) -> Unit) {
 @Composable
 private fun SystemWidgetList(onPick: (AppWidgetProviderInfo) -> Unit) {
     val context = LocalContext.current
-    val providers by produceState<List<AppWidgetProviderInfo>>(emptyList()) {
+    // null = todavía buscando; lista vacía = no hay widgets.
+    val loaded by produceState<List<AppWidgetProviderInfo>?>(null) {
         value = withContext(Dispatchers.IO) { WidgetHost.providers(context) }
     }
+    val providers = loaded.orEmpty()
     Column(Modifier.fillMaxWidth().heightIn(max = 640.dp)) {
         Text("Widgets de otras apps", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
-        if (providers.isEmpty()) Hint("Buscando widgets…")
+        if (loaded == null) Hint("Buscando widgets…")
+        else if (providers.isEmpty()) Hint("No encontramos widgets de otras apps en tu teléfono.")
         LazyColumn {
             items(providers, key = { it.provider.flattenToString() }) { info ->
                 val pm = context.packageManager
@@ -440,13 +469,71 @@ private fun SystemWidgetList(onPick: (AppWidgetProviderInfo) -> Unit) {
 
 // -------------------------------------------------------- propiedades
 
+private fun typeName(item: HomeItem): String = when (item.type) {
+    ItemType.APP -> "Editar app"
+    ItemType.FOLDER -> "Editar carpeta"
+    ItemType.CUSTOM_WIDGET, ItemType.DESIGN_WIDGET, ItemType.SYSTEM_WIDGET -> "Editar widget"
+    ItemType.STICKER -> when (item.stickerSource) {
+        StickerSource.IMAGE -> "Editar foto"
+        StickerSource.VIDEO -> "Editar video"
+        StickerSource.DRAWING -> "Editar dibujo"
+        StickerSource.ANIMATION -> "Editar animación"
+        StickerSource.SCENE -> "Editar escena"
+        StickerSource.LIBRARY -> "Editar sticker"
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ItemEditorSheet(original: HomeItem, settings: LauncherSettings, ui: LauncherUi) {
     val context = LocalContext.current
-    var item by remember(original.id) { mutableStateOf(original) }
+    val scope = rememberCoroutineScope()
+    // Cómo estaba al abrir: «Cancelar cambios» vuelve a esto.
+    val start = remember(original.id) { StudioStore.items.firstOrNull { it.id == original.id } ?: original }
+    val startWidget = remember(original.id) { StudioStore.widget(start.customWidgetId) }
+    var item by remember(original.id) { mutableStateOf(start) }
+    var touched by remember(original.id) { mutableStateOf(false) }
+    var keepRatio by remember(original.id) { mutableStateOf(true) }
+    var folderQuery by remember(original.id) { mutableStateOf("") }
+    var pickSticker by remember { mutableStateOf(false) }
     val apps by AppCatalog.apps.collectAsStateWithLifecycle()
-    fun save(i: HomeItem) { item = i; StudioStore.upsertItem(i) }
+    val widgets by StudioStore.widgetsFlow.collectAsStateWithLifecycle()
+    val drawings by StudioStore.drawingsFlow.collectAsStateWithLifecycle()
+    val animations by StudioStore.animationsFlow.collectAsStateWithLifecycle()
+
+    fun markTouched() {
+        if (!touched) { ui.snapshot(); touched = true }
+    }
+    fun save(i: HomeItem) { markTouched(); item = i; StudioStore.upsertItem(i) }
+    fun cancelChanges() {
+        StudioStore.upsertItem(start)
+        startWidget?.let { StudioStore.saveWidget(it) }
+        item = start
+        touched = false
+        ui.editItem = null
+    }
+
+    val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) scope.launch {
+            val path = withContext(Dispatchers.IO) { ImageStore.importImage(context, uri, 1400) }
+            if (path != null) save(item.copy(mediaPath = path))
+        }
+    }
+    val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) scope.launch {
+            val path = withContext(Dispatchers.IO) { ImageStore.importVideo(context, uri) }
+            if (path != null) save(item.copy(mediaPath = path))
+        }
+    }
+    if (pickSticker) com.migux97.simon.ui.components.StickerPickerDialog(onDismiss = { pickSticker = false }) { info ->
+        pickSticker = false
+        save(item.copy(mediaId = info.id))
+    }
+
+    // Un "Texto" agregado desde «Agregar» es un widget con un solo texto: se edita acá mismo.
+    val textWidget = if (item.type == ItemType.CUSTOM_WIDGET)
+        widgets.firstOrNull { it.id == item.customWidgetId }?.takeIf { it.elements.size == 1 && it.elements[0].type == ElementType.TEXT }
+    else null
 
     ModalBottomSheet(onDismissRequest = { ui.editItem = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
       Column(Modifier.fillMaxWidth().heightIn(max = 720.dp).verticalScroll(rememberScrollState())) {
@@ -456,24 +543,25 @@ fun ItemEditorSheet(original: HomeItem, settings: LauncherSettings, ui: Launcher
                 .padding(horizontal = 20.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text("Propiedades", style = MaterialTheme.typography.titleLarge)
-            LabeledSlider("Giro", item.rotation, -180f..180f, "${item.rotation.roundToInt()}°") { save(item.copy(rotation = it)) }
-            LabeledSlider("Transparencia", item.alpha, 0.1f..1f, "${(item.alpha * 100).roundToInt()}%") { save(item.copy(alpha = it)) }
-            LabeledSlider("Ancho", item.w, 0.05f..1.2f, "${(item.w * 100).roundToInt()}%") { save(item.copy(w = it)) }
-            LabeledSlider("Alto", item.h, 0.03f..1.2f, "${(item.h * 100).roundToInt()}%") { save(item.copy(h = it)) }
-            Text("Movimiento", style = MaterialTheme.typography.titleMedium)
-        }
-        ChoiceChips(Motion.entries, item.motion, { it.label }, { save(item.copy(motion = it)) })
-        Column(Modifier.padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (item.motion != Motion.NONE) LabeledSlider("Velocidad", item.motionSpeed, 0.2f..3f, "x%.1f".format(item.motionSpeed)) { save(item.copy(motionSpeed = it)) }
-            if (item.page >= 0) {
-                Text("Página", style = MaterialTheme.typography.titleMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    repeat(settings.pages) { p ->
-                        if (p == item.page) FilledTonalButton(onClick = {}) { Text("${p + 1}") }
-                        else OutlinedButton(onClick = { save(item.copy(page = p)) }) { Text("${p + 1}") }
-                    }
-                }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(typeName(item), style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                Button(onClick = { ui.editItem = null }) { Text("Listo") }
+            }
+            if (touched) OutlinedButton(onClick = { cancelChanges() }) { Text("Cancelar cambios (volver a como estaba)") }
+
+            // ---- Contenido propio de cada tipo, arriba de todo
+            if (textWidget != null) {
+                val el = textWidget.elements[0]
+                fun saveText(e: WElement) { markTouched(); StudioStore.saveWidget(textWidget.copy(elements = listOf(e))) }
+                OutlinedTextField(
+                    el.text, { saveText(el.copy(text = it.take(80))) },
+                    label = { Text("Texto") },
+                    supportingText = { Text("Podés usar {saludo}, {hora}, {fecha}, {bateria}…") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text("Letra", style = MaterialTheme.typography.titleMedium)
+                ChoiceChips(FontStyle.entries, el.font, { it.label }, { saveText(el.copy(font = it)) }, Modifier.padding(horizontal = 0.dp))
+                ColorRow("Color del texto", el.textColor) { saveText(el.copy(textColor = it)) }
             }
             when (item.type) {
                 ItemType.APP -> {
@@ -488,41 +576,205 @@ fun ItemEditorSheet(original: HomeItem, settings: LauncherSettings, ui: Launcher
                 ItemType.FOLDER -> {
                     OutlinedTextField(item.title, { save(item.copy(title = it.take(24))) }, label = { Text("Nombre") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     ColorRow("Color", item.folderColor) { save(item.copy(folderColor = it)) }
-                    Text("Apps en la carpeta", style = MaterialTheme.typography.titleMedium)
-                    apps.forEach { app ->
+                    Text("Apps en la carpeta (${item.folderApps.size})", style = MaterialTheme.typography.titleMedium)
+                    OutlinedTextField(
+                        folderQuery, { folderQuery = it },
+                        placeholder = { Text("Buscar app") },
+                        leadingIcon = { Icon(Icons.Filled.Search, null) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    // Las que ya estaban en la carpeta van primero (el orden no salta al tildar).
+                    val initial = remember(original.id) { start.folderApps.toSet() }
+                    val shown = apps
+                        .filter { folderQuery.isBlank() || it.label.contains(folderQuery, ignoreCase = true) || AppCatalog.label(it).contains(folderQuery, ignoreCase = true) }
+                        .sortedByDescending { it.key in initial }
+                    if (shown.isEmpty()) Text("No hay apps con ese nombre.", style = MaterialTheme.typography.bodySmall)
+                    shown.forEach { app ->
                         val checked = app.key in item.folderApps
                         Row(Modifier.fillMaxWidth().clickable {
                             save(item.copy(folderApps = if (checked) item.folderApps - app.key else item.folderApps + app.key))
                         }, verticalAlignment = Alignment.CenterVertically) {
                             Checkbox(checked, null)
-                            Text(app.label)
+                            Text(AppCatalog.label(app))
                         }
                     }
                 }
                 ItemType.CUSTOM_WIDGET -> FilledTonalButton(onClick = {
                     ui.editItem = null
                     context.startActivity(Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_ROUTE, "builder/${item.customWidgetId}").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                }) { Text("Editar en el constructor") }
+                }) { Text(if (textWidget != null) "Más opciones en el constructor" else "Editar en el constructor") }
                 ItemType.DESIGN_WIDGET -> FilledTonalButton(onClick = {
                     ui.editItem = null
                     context.startActivity(Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_EDIT_DESIGN, item.designId).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                 }) { Text("Editar diseño") }
-                else -> Unit
+                ItemType.STICKER -> when (item.stickerSource) {
+                    StickerSource.IMAGE -> FilledTonalButton(onClick = { photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) { Text("Cambiar imagen") }
+                    StickerSource.VIDEO -> FilledTonalButton(onClick = { videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) }) { Text("Cambiar video") }
+                    StickerSource.LIBRARY -> FilledTonalButton(onClick = { pickSticker = true }) { Text("Cambiar sticker") }
+                    StickerSource.DRAWING -> {
+                        Text("Cambiar dibujo", style = MaterialTheme.typography.titleMedium)
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(drawings, key = { it.id }) { d ->
+                                val bmp by produceState<android.graphics.Bitmap?>(null, d.id, d.updatedAt) { value = withContext(Dispatchers.IO) { MediaLibrary.loadDrawing(d.id, 200) } }
+                                Box(
+                                    Modifier.size(64.dp).clip(RoundedCornerShape(12.dp))
+                                        .background(if (d.id == item.mediaId) MaterialTheme.colorScheme.primary.copy(alpha = 0.4f) else Color(0x22888888))
+                                        .clickable { save(item.copy(mediaId = d.id)) }
+                                ) { bmp?.let { Image(it.asImageBitmap(), d.name, Modifier.fillMaxSize()) } }
+                            }
+                        }
+                    }
+                    StickerSource.ANIMATION -> {
+                        Text("Cambiar animación", style = MaterialTheme.typography.titleMedium)
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(animations, key = { it.id }) { a ->
+                                Box(
+                                    Modifier.size(64.dp).clip(RoundedCornerShape(12.dp))
+                                        .background(if (a.id == item.mediaId) MaterialTheme.colorScheme.primary.copy(alpha = 0.4f) else Color(0x22888888))
+                                        .clickable { save(item.copy(mediaId = a.id)) }
+                                ) { AnimatedFrames(a.id, Modifier.fillMaxSize()) }
+                            }
+                        }
+                    }
+                    StickerSource.SCENE -> {
+                        Text("Cambiar escena", style = MaterialTheme.typography.titleMedium)
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(Catalog.liveWallpapers, key = { it.id }) { lv ->
+                                Box(
+                                    Modifier.width(48.dp).height(80.dp).clip(RoundedCornerShape(12.dp))
+                                        .background(if (lv.id == item.liveId) MaterialTheme.colorScheme.primary else Color.Transparent)
+                                        .padding(if (lv.id == item.liveId) 3.dp else 0.dp)
+                                        .clickable { save(item.copy(liveId = lv.id)) }
+                                ) { SceneThumb(lv, Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp))) }
+                            }
+                        }
+                    }
+                }
+                ItemType.SYSTEM_WIDGET -> Text(
+                    "Es un widget de otra app: su contenido lo maneja esa app. Acá podés cambiar el tamaño, la posición y el giro.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // ---- Posición y tamaño
+            Text("Posición", style = MaterialTheme.typography.titleMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { save(item.copy(x = (1f - item.w) / 2f)) }) { Text("Centrar") }
+                OutlinedButton(onClick = { save(item.copy(rotation = 0f)) }, enabled = item.rotation != 0f) { Text("Girar a 0°") }
+            }
+            LabeledSlider("Horizontal", item.x.coerceIn(-0.5f, 1f), -0.5f..1f, "${(item.x * 100).roundToInt()}%") { save(item.copy(x = it)) }
+            LabeledSlider("Vertical", item.y.coerceIn(-0.05f, 1f), -0.05f..1f, "${(item.y * 100).roundToInt()}%") { save(item.copy(y = it)) }
+            Text("Tamaño", style = MaterialTheme.typography.titleMedium)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Mantener proporción", Modifier.weight(1f))
+                Switch(keepRatio, { keepRatio = it })
+            }
+            LabeledSlider("Ancho", item.w.coerceIn(0.05f, 1.2f), 0.05f..1.2f, "${(item.w * 100).roundToInt()}%") { w ->
+                save(if (keepRatio && item.w > 0f) item.copy(w = w, h = (item.h * w / item.w).coerceIn(0.03f, 1.2f)) else item.copy(w = w))
+            }
+            LabeledSlider("Alto", item.h.coerceIn(0.03f, 1.2f), 0.03f..1.2f, "${(item.h * 100).roundToInt()}%") { h ->
+                save(if (keepRatio && item.h > 0f) item.copy(h = h, w = (item.w * h / item.h).coerceIn(0.05f, 1.2f)) else item.copy(h = h))
+            }
+            LabeledSlider("Giro", item.rotation.coerceIn(-180f, 180f), -180f..180f, "${item.rotation.roundToInt()}°") { save(item.copy(rotation = it)) }
+            LabeledSlider("Transparencia", item.alpha, 0.1f..1f, "${(item.alpha * 100).roundToInt()}%") { save(item.copy(alpha = it)) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Bloquear posición", Modifier.weight(1f))
+                Switch(item.locked, { save(item.copy(locked = it)) })
+            }
+            Text("Movimiento", style = MaterialTheme.typography.titleMedium)
+        }
+        ChoiceChips(Motion.entries, item.motion, { it.label }, { save(item.copy(motion = it)) })
+        Column(Modifier.padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (item.motion != Motion.NONE) LabeledSlider("Velocidad", item.motionSpeed, 0.2f..3f, "x%.1f".format(item.motionSpeed)) { save(item.copy(motionSpeed = it)) }
+            if (item.page >= 0) {
+                Text("Mover a otra página", style = MaterialTheme.typography.titleMedium)
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    repeat(settings.pages) { p ->
+                        if (p == item.page) FilledTonalButton(onClick = {}) { Text("${p + 1}") }
+                        else OutlinedButton(onClick = { save(item.copy(page = p)) }) { Text("${p + 1}") }
+                    }
+                }
             }
         }
         com.migux97.simon.ui.components.StickerAttachEditor(item.stickers) { save(item.copy(stickers = it)) }
         Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
             HorizontalDivider()
-            TextButton(onClick = {
-                if (item.type == ItemType.SYSTEM_WIDGET) WidgetHost.delete(context, item.appWidgetId)
-                StudioStore.removeItem(item.id)
-                ui.editItem = null
-                ui.selectedId = null
-            }) { Text("Quitar de la pantalla", color = MaterialTheme.colorScheme.error) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = {
+                    ui.remove(item)
+                    ui.editItem = null
+                }) { Text("Quitar de la pantalla", color = MaterialTheme.colorScheme.error) }
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = { cancelChanges() }, enabled = touched) { Text("Cancelar cambios") }
+            }
         }
       }
     }
 }
+
+// ------------------------------------------------------------- dock
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DockEditorSheet(settings: LauncherSettings, ui: LauncherUi) {
+    val apps by AppCatalog.apps.collectAsStateWithLifecycle()
+    var picking by remember { mutableStateOf(false) }
+    fun setDock(list: List<String>) = StudioStore.updateLauncher { it.copy(dockApps = list.distinct().take(MAX_DOCK)) }
+    fun move(i: Int, d: Int) {
+        val l = StudioStore.launcherSettings.dockApps.toMutableList()
+        val j = i + d
+        if (i !in l.indices || j !in l.indices) return
+        val t = l[i]; l[i] = l[j]; l[j] = t
+        setDock(l)
+    }
+    ModalBottomSheet(onDismissRequest = { ui.dockEditor = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        if (picking) Column {
+            TextButton(onClick = { picking = false }, modifier = Modifier.padding(start = 8.dp)) { Text("← Volver") }
+            Text("Elegí una app para el dock", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 20.dp))
+            AppPickerList(apps.filter { it.key !in settings.dockApps }) { app ->
+                setDock(StudioStore.launcherSettings.dockApps + app.key)
+                picking = false
+            }
+        } else Column(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(max = 640.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text("Editar dock", style = MaterialTheme.typography.titleLarge)
+            Text("Las apps fijas de abajo de todo. Entran hasta $MAX_DOCK.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Mostrar el dock", Modifier.weight(1f))
+                Switch(settings.dockEnabled, { on -> StudioStore.updateLauncher { it.copy(dockEnabled = on) } })
+            }
+            if (settings.dockApps.isEmpty()) Text("El dock está vacío. Tocá «Agregar app».", style = MaterialTheme.typography.bodyMedium)
+            settings.dockApps.forEachIndexed { i, key ->
+                val app = AppCatalog.find(key)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (app != null) AppIconBitmap(app, settings, 40, Modifier.size(36.dp)) else Spacer(Modifier.size(36.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(app?.let { AppCatalog.label(it) } ?: "App desinstalada", maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { move(i, -1) }, enabled = i > 0, contentPadding = PaddingValues(horizontal = 6.dp)) { Text("Subir") }
+                    TextButton(onClick = { move(i, 1) }, enabled = i < settings.dockApps.size - 1, contentPadding = PaddingValues(horizontal = 6.dp)) { Text("Bajar") }
+                    TextButton(onClick = { setDock(StudioStore.launcherSettings.dockApps - key) }, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                        Text("Quitar", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+            val full = settings.dockApps.size >= MAX_DOCK
+            Button(onClick = { picking = true }, enabled = !full) { Text("Agregar app") }
+            if (full) Text("El dock ya tiene $MAX_DOCK apps; sacá una primero.", style = MaterialTheme.typography.bodySmall)
+            Text("«Subir» la mueve a la izquierda y «Bajar» a la derecha.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/** Máximo de apps en el dock. */
+const val MAX_DOCK = 6
 
 // ------------------------------------------------------------ menú app
 
@@ -545,14 +797,19 @@ fun AppMenuSheet(app: LaunchApp, homeItem: HomeItem?, settings: LauncherSettings
                 StudioStore.upsertItem(LauncherLayout.appItem(app.key, page, settings)); close(); ui.drawerOpen = false
             } else MenuRow("Mover o editar en la pantalla") { close(); ui.editMode = true; ui.selectedId = homeItem.id }
             MenuRow(if (inDock) "Quitar del dock" else "Agregar al dock") {
-                StudioStore.updateLauncher { s -> s.copy(dockApps = if (inDock) s.dockApps - app.key else (s.dockApps + app.key).take(6)) }
+                if (!inDock && settings.dockApps.size >= MAX_DOCK) {
+                    Toast.makeText(context, "El dock ya tiene $MAX_DOCK apps; sacá una primero.", Toast.LENGTH_LONG).show()
+                    return@MenuRow
+                }
+                StudioStore.updateLauncher { s -> s.copy(dockApps = if (inDock) s.dockApps - app.key else (s.dockApps + app.key).take(MAX_DOCK)) }
                 close()
             }
             MenuRow(if (hidden) "Mostrar en el cajón" else "Esconder del cajón") {
                 StudioStore.updateLauncher { s -> s.copy(hiddenApps = if (hidden) s.hiddenApps - app.key else s.hiddenApps + app.key) }
                 close()
             }
-            if (homeItem != null) MenuRow("Quitar de la pantalla") { StudioStore.removeItem(homeItem.id); close() }
+            if (homeItem != null) MenuRow("Quitar de la pantalla") { ui.remove(homeItem); close() }
+            MenuRow("Editar pantalla") { close(); ui.drawerOpen = false; ui.openFolder = null; ui.editMode = true }
             MenuRow("Información de la app") { AppCatalog.openInfo(context, app); close() }
             MenuRow("Desinstalar") { AppCatalog.uninstall(context, app); close() }
         }

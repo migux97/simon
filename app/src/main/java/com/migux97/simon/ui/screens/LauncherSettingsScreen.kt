@@ -1,6 +1,7 @@
 package com.migux97.simon.ui.screens
 
 import android.content.Intent
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -24,7 +25,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -58,6 +62,8 @@ import com.migux97.simon.data.Motion
 import com.migux97.simon.data.PageTransition
 import com.migux97.simon.data.StudioStore
 import com.migux97.simon.launcher.AnimatedFrames
+import com.migux97.simon.launcher.AppCatalog
+import com.migux97.simon.launcher.LauncherLayout
 import com.migux97.simon.launcher.IconPackInfo
 import com.migux97.simon.launcher.IconPacks
 import com.migux97.simon.launcher.IconResolver
@@ -68,6 +74,8 @@ import com.migux97.simon.ui.Nav
 import com.migux97.simon.ui.components.BackTopBar
 import com.migux97.simon.ui.components.ChoiceChips
 import com.migux97.simon.ui.components.ColorRow
+import com.migux97.simon.ui.components.ConfirmDialog
+import com.migux97.simon.ui.components.StartOverButton
 import com.migux97.simon.ui.components.LabeledSlider
 import com.migux97.simon.ui.components.Panel
 import com.migux97.simon.ui.components.SceneThumb
@@ -89,6 +97,32 @@ fun LauncherSettingsScreen(nav: Nav) {
     val owner = LocalLifecycleOwner.current
     LaunchedEffect(owner) { owner.repeatOnLifecycle(Lifecycle.State.RESUMED) { isDefault = SystemActions.isDefaultLauncher(context) } }
     var packs by remember { mutableStateOf<List<IconPackInfo>>(emptyList()) }
+    var askSuggested by remember { mutableStateOf(false) }
+    if (askSuggested) ConfirmDialog(
+        title = "¿Volver a la pantalla sugerida?",
+        message = "Se reemplaza lo que hay en las páginas del launcher por un reloj y tus apps más recientes, y se arma el dock de nuevo. La capa, la pantalla de bloqueo y la de carga no se tocan.",
+        confirm = "Sí, volver",
+        onDismiss = { askSuggested = false },
+        onConfirm = {
+            askSuggested = false
+            AppCatalog.ensureLoaded(context)
+            scope.launch {
+                val done = withContext(Dispatchers.IO) {
+                    // Las apps se cargan en segundo plano: se espera un poquito si hace falta.
+                    var tries = 0
+                    while (AppCatalog.apps.value.isEmpty() && tries < 30) { kotlinx.coroutines.delay(100); tries++ }
+                    if (AppCatalog.apps.value.isEmpty()) false
+                    else { LauncherLayout.createDefault(context, withApps = true); true }
+                }
+                if (done) Toast.makeText(context, "Listo: se armó la pantalla sugerida.", Toast.LENGTH_SHORT).show()
+                else {
+                    // Sin la lista de apps, el launcher pregunta cómo arrancar la próxima vez que se abra.
+                    set { it.copy(initialized = false) }
+                    Toast.makeText(context, "La próxima vez que abras el launcher vas a poder elegir cómo arrancar.", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    )
     LaunchedEffect(Unit) { packs = withContext(Dispatchers.IO) { IconPacks.installed(context) } }
 
     val photo = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -143,11 +177,15 @@ fun LauncherSettingsScreen(nav: Nav) {
                     if (!isDefault) Button(onClick = {
                         try { context.startActivity(SystemActions.requestDefaultLauncher(context).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (_: Exception) {}
                     }) { Text("Usar Simón") }
-                    FilledTonalButton(onClick = {
+                    OutlinedButton(onClick = {
                         context.startActivity(Intent(context, LauncherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                     }) { Text("Abrir launcher") }
                 }
-                Text("Para mover cosas: mantené presionado un espacio vacío del launcher.", style = MaterialTheme.typography.bodySmall)
+                Button(
+                    onClick = { try { context.startActivity(LauncherActivity.editIntent(context)) } catch (_: Exception) {} },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Editar la pantalla de inicio") }
+                Text(editHint(s), style = MaterialTheme.typography.bodySmall)
             }
 
             Title("Fondo del launcher")
@@ -172,7 +210,7 @@ fun LauncherSettingsScreen(nav: Nav) {
                         ) { SceneThumb(lv, Modifier.fillMaxSize()) }
                     }
                 }
-                LauncherBgType.ANIMATION -> LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                LauncherBgType.ANIMATION -> if (animations.isEmpty()) Hint("Todavía no hiciste animaciones. Creá una en Crear → Animación.") else LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(animations, key = { it.id }) { a ->
                         Box(
                             Modifier.size(70.dp).clip(RoundedCornerShape(12.dp))
@@ -181,11 +219,21 @@ fun LauncherSettingsScreen(nav: Nav) {
                         ) { AnimatedFrames(a.id, Modifier.fillMaxSize()) }
                     }
                 }
-                LauncherBgType.DRAWING -> LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                LauncherBgType.DRAWING -> if (drawings.isEmpty()) Hint("Todavía no hiciste dibujos. Creá uno en Crear → Dibujo.") else LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(drawings, key = { it.id }) { d ->
                         OutlinedButton(onClick = { set { it.copy(background = it.background.copy(mediaId = d.id)) } }) {
                             Text(if (s.background.mediaId == d.id) "✓ ${d.name}" else d.name)
                         }
+                    }
+                }
+                LauncherBgType.IMAGE -> Row(Modifier.padding(horizontal = 16.dp)) {
+                    FilledTonalButton(onClick = { photo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
+                        Text(if (s.background.path == null) "Elegir foto" else "Cambiar foto")
+                    }
+                }
+                LauncherBgType.VIDEO -> Row(Modifier.padding(horizontal = 16.dp)) {
+                    FilledTonalButton(onClick = { video.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) }) {
+                        Text(if (s.background.path == null) "Elegir video" else "Cambiar video")
                     }
                 }
                 else -> Unit
@@ -233,7 +281,7 @@ fun LauncherSettingsScreen(nav: Nav) {
                 Toggle("Mostrar dock", s.dockEnabled) { v -> set { it.copy(dockEnabled = v) } }
                 ColorRow("Color del dock", s.dockColor) { c -> set { it.copy(dockColor = c) } }
                 LabeledSlider("Esquinas", s.dockRadius.toFloat(), 0f..40f, "${s.dockRadius}") { v -> set { it.copy(dockRadius = v.roundToInt()) } }
-                Text("Para agregar apps al dock, mantené presionada una app → «Agregar al dock».", style = MaterialTheme.typography.bodySmall)
+                Text("Para elegir y ordenar las apps del dock: «Editar la pantalla de inicio» → «Editar dock». También podés mantener presionada una app → «Agregar al dock».", style = MaterialTheme.typography.bodySmall)
             }
 
             Title("Cajón de apps")
@@ -245,6 +293,7 @@ fun LauncherSettingsScreen(nav: Nav) {
             }
 
             Title("Gestos")
+            Hint("Tocá cada uno para elegir qué hace.")
             GestureRow("Deslizar hacia arriba", s.swipeUp) { g -> set { it.copy(swipeUp = g) } }
             GestureRow("Deslizar hacia abajo", s.swipeDown) { g -> set { it.copy(swipeDown = g) } }
             GestureRow("Doble toque", s.doubleTap) { g -> set { it.copy(doubleTap = g) } }
@@ -252,7 +301,11 @@ fun LauncherSettingsScreen(nav: Nav) {
 
             Title("Páginas")
             Panel {
-                LabeledSlider("Cantidad de páginas", s.pages.toFloat(), 1f..8f, "${s.pages}") { v -> set { it.copy(pages = v.roundToInt()) } }
+                LabeledSlider("Cantidad de páginas", s.pages.toFloat(), 1f..8f, "${s.pages}") { v ->
+                    val n = v.roundToInt()
+                    if (n != s.pages) LauncherLayout.setPageCount(n)
+                }
+                Text("Si sacás páginas, lo que tenían pasa a la última.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Toggle("Indicador de página", s.pageIndicator) { v -> set { it.copy(pageIndicator = v) } }
                 Toggle("Acomodar a la grilla al soltar", s.snapToGrid) { v -> set { it.copy(snapToGrid = v) } }
                 LabeledSlider("Columnas de la grilla", s.gridColumns.toFloat(), 3f..7f, "${s.gridColumns}") { v -> set { it.copy(gridColumns = v.roundToInt()) } }
@@ -261,11 +314,16 @@ fun LauncherSettingsScreen(nav: Nav) {
             Title("Transición entre páginas")
             ChoiceChips(PageTransition.entries, s.transition, { it.label }, { t -> set { it.copy(transition = t) } })
             Spacer(Modifier.height(8.dp))
+            Title("Volver a empezar")
             Panel {
-                OutlinedButton(onClick = {
-                    StudioStore.setItems(emptyList())
-                    set { it.copy(initialized = false) }
-                }) { Text("Volver a la pantalla por defecto") }
+                Text(
+                    "«Empezar de cero» vacía las páginas del launcher. «Volver a la pantalla sugerida» las arma de nuevo con un reloj y tus apps. La capa, la pantalla de bloqueo y la de carga no se tocan.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                StartOverButton(
+                    message = "Se borra todo lo que pusiste en las páginas del launcher. La capa, la pantalla de bloqueo y la de carga no se tocan."
+                ) { LauncherLayout.clearLauncherPages(context) }
+                OutlinedButton(onClick = { askSuggested = true }) { Text("Volver a la pantalla sugerida") }
             }
         }
     }
@@ -284,8 +342,42 @@ private fun Toggle(label: String, value: Boolean, onChange: (Boolean) -> Unit) {
     }
 }
 
+/** Un gesto: muestra lo que hace ahora y, al tocarlo, una lista para elegir. */
 @Composable
 private fun GestureRow(label: String, value: GestureAction, onChange: (GestureAction) -> Unit) {
-    Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(start = 20.dp, top = 6.dp))
-    ChoiceChips(GestureAction.entries, value, { it.label }, onChange)
+    var open by remember { mutableStateOf(false) }
+    Row(
+        Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        TextButton(onClick = { open = true }) { Text(value.label + " ▾") }
+    }
+    if (open) AlertDialog(
+        onDismissRequest = { open = false },
+        title = { Text(label) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                GestureAction.entries.forEach { g ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { onChange(g); open = false }.padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(selected = g == value, onClick = { onChange(g); open = false })
+                        Text(g.label)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { open = false }) { Text("Cerrar") } }
+    )
+}
+
+/** Cómo entrar a editar el launcher, según los gestos que configuraste. */
+private fun editHint(s: LauncherSettings): String = when (GestureAction.EDIT) {
+    s.longPress -> "Para mover cosas: mantené presionado un espacio vacío del launcher, o usá el botón de arriba."
+    s.doubleTap -> "Para mover cosas: tocá dos veces un espacio vacío del launcher, o usá el botón de arriba."
+    s.swipeUp -> "Para mover cosas: deslizá hacia arriba en el launcher, o usá el botón de arriba."
+    s.swipeDown -> "Para mover cosas: deslizá hacia abajo en el launcher, o usá el botón de arriba."
+    else -> "Para mover cosas: usá el botón de arriba, o mantené presionada una app → «Editar pantalla»."
 }

@@ -1,6 +1,8 @@
 package com.migux97.simon.ui.screens
 
+import android.content.Context
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -10,6 +12,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -35,11 +38,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowDownward
-import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -48,11 +46,14 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
@@ -76,6 +77,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.migux97.simon.custom.CustomWidgetLive
@@ -91,7 +93,6 @@ import com.migux97.simon.data.MediaLibrary
 import com.migux97.simon.data.Motion
 import com.migux97.simon.data.ProgressSource
 import com.migux97.simon.data.ProgressStyle
-import com.migux97.simon.data.Repository
 import com.migux97.simon.data.ShapeKind
 import com.migux97.simon.data.StudioStore
 import com.migux97.simon.data.TapAction
@@ -105,18 +106,24 @@ import com.migux97.simon.ui.Nav
 import com.migux97.simon.ui.components.BackTopBar
 import com.migux97.simon.ui.components.ChoiceChips
 import com.migux97.simon.ui.components.ColorRow
+import com.migux97.simon.ui.components.HelpTip
 import com.migux97.simon.ui.components.LabeledSlider
 import com.migux97.simon.ui.components.Panel
 import com.migux97.simon.ui.components.PreviewBackdrop
 import com.migux97.simon.ui.components.SceneThumb
-import com.migux97.simon.widget.Place
+import com.migux97.simon.ui.components.StartOverButton
+import com.migux97.simon.ui.components.UndoButton
+import com.migux97.simon.ui.components.UndoStack
+import com.migux97.simon.ui.components.UnsavedChangesDialog
 import com.migux97.simon.widget.RefreshWorker
-import com.migux97.simon.widget.WeatherService
 import com.migux97.simon.widget.WidgetUpdater
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
+
+private const val HINTS_PREFS = "simon_hints"
+private const val HINT_BUILDER_GESTURES = "builder_gestures"
 
 /** Elementos nuevos con valores lindos por defecto. */
 private fun newElement(type: ElementType): WElement = when (type) {
@@ -129,8 +136,8 @@ private fun newElement(type: ElementType): WElement = when (type) {
     else -> WElement(type = type, x = 0.25f, y = 0.15f, w = 0.5f, h = 0.7f, shape = ShapeKind.ROUNDED, corner = 0.2f)
 }
 
-/** Plantillas de punto de partida para el constructor. */
-private fun starter(kind: Int): CustomWidget = when (kind) {
+/** Modelos de punto de partida para el constructor (también se muestran en «Crear»). */
+internal fun builderStarter(kind: Int): CustomWidget = when (kind) {
     1 -> CustomWidget(
         name = "Saludo con hora", aspect = 2.1f, bg1 = 0xFF0F2027.toInt(), bg2 = 0xFF2C5364.toInt(),
         elements = listOf(
@@ -163,25 +170,79 @@ private fun starter(kind: Int): CustomWidget = when (kind) {
 fun BuilderScreen(nav: Nav, widgetId: String) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val stored = remember(widgetId) { StudioStore.widget(widgetId) }
     val initial = remember(widgetId) {
-        StudioStore.widget(widgetId) ?: when (widgetId) {
-            "new1" -> starter(1); "new2" -> starter(2); "new3" -> starter(3)
-            else -> starter(0)
+        stored ?: when (widgetId) {
+            "new1" -> builderStarter(1); "new2" -> builderStarter(2); "new3" -> builderStarter(3)
+            else -> builderStarter(0)
         }
     }
     var w by remember(widgetId) { mutableStateOf(initial) }
+    // Última versión guardada (null = todavía no se guardó nunca).
+    var saved by remember(widgetId) { mutableStateOf(stored) }
+    val dirty = w != (saved ?: initial)
+    val undo = remember(widgetId) { UndoStack<CustomWidget>() }
+    val lastPush = remember(widgetId) { longArrayOf(0L) }
+    val snackbar = remember { SnackbarHostState() }
     var selectedId by remember { mutableStateOf<String?>(w.elements.firstOrNull()?.id) }
     var tab by remember { mutableIntStateOf(0) }
     var addMenu by remember { mutableStateOf(false) }
     var pickApp by remember { mutableStateOf<((String) -> Unit)?>(null) }
+    var confirmExit by remember { mutableStateOf(false) }
+    val hints = remember { context.getSharedPreferences(HINTS_PREFS, Context.MODE_PRIVATE) }
+    var showHint by remember { mutableStateOf(!hints.getBoolean(HINT_BUILDER_GESTURES, false)) }
     val selected = w.elements.firstOrNull { it.id == selectedId }
 
-    fun updateEl(e: WElement) { w = w.copy(elements = w.elements.map { if (it.id == e.id) e else it }) }
+    /**
+     * Aplica un cambio guardando el estado anterior para «Deshacer». Los cambios
+     * seguidos (por ejemplo al mover un deslizador) se juntan en un solo paso.
+     */
+    fun change(next: CustomWidget, coalesce: Boolean = true) {
+        if (next == w) return
+        val now = System.currentTimeMillis()
+        if (!coalesce || now - lastPush[0] > 700L) undo.push(w)
+        lastPush[0] = now
+        w = next
+    }
+    fun updateEl(e: WElement) = change(w.copy(elements = w.elements.map { if (it.id == e.id) e else it }))
+    /** Para arrastres: el estado anterior se guardó al empezar el gesto. */
+    fun updateElDuringGesture(e: WElement) { w = w.copy(elements = w.elements.map { if (it.id == e.id) e else it }) }
+    fun beginGesture() {
+        undo.push(w)
+        lastPush[0] = System.currentTimeMillis()
+    }
+    fun moveLayer(from: Int, to: Int) {
+        val list = w.elements.toMutableList()
+        if (from !in list.indices || to !in list.indices || from == to) return
+        val el = list.removeAt(from)
+        list.add(to, el)
+        change(w.copy(elements = list), coalesce = false)
+    }
+    fun doUndo() {
+        val prev = undo.pop() ?: return
+        w = prev
+        if (prev.elements.none { it.id == selectedId }) selectedId = prev.elements.lastOrNull()?.id
+    }
+    fun deleteElement(el: WElement) {
+        val before = w
+        change(w.copy(elements = w.elements.filterNot { it.id == el.id }), coalesce = false)
+        selectedId = w.elements.lastOrNull()?.id
+        scope.launch {
+            snackbar.currentSnackbarData?.dismiss()
+            val result = snackbar.showSnackbar("Borraste «${el.type.label}»", actionLabel = "Deshacer", duration = SnackbarDuration.Short)
+            if (result == SnackbarResult.ActionPerformed) {
+                change(before, coalesce = false)
+                selectedId = el.id
+            }
+        }
+    }
     fun save(): CustomWidget {
-        StudioStore.saveWidget(w)
-        WidgetUpdater.updateCustomWidget(context, w.id)
-        if (w.city.isNotBlank()) RefreshWorker.runNow(context)
-        return w
+        val current = w
+        StudioStore.saveWidget(current)
+        WidgetUpdater.updateCustomWidget(context, current.id)
+        if (current.city.isNotBlank()) RefreshWorker.runNow(context)
+        saved = current
+        return current
     }
 
     var pickTarget by remember { mutableStateOf("") }
@@ -191,150 +252,203 @@ fun BuilderScreen(nav: Nav, widgetId: String) {
             val path = withContext(Dispatchers.IO) { if (isVideo) ImageStore.importVideo(context, uri) else ImageStore.importImage(context, uri, 1400) }
             if (path == null) return@launch
             when (pickTarget) {
-                "bg" -> w = w.copy(bgImage = path)
-                else -> selected?.let { updateEl(it.copy(mediaPath = path)) }
+                "bg" -> change(w.copy(bgImage = path), coalesce = false)
+                else -> w.elements.firstOrNull { it.id == selectedId }?.let { updateEl(it.copy(mediaPath = path)) }
             }
         }
     }
 
-    Column(Modifier.fillMaxSize()) {
-        BackTopBar(w.name, onBack = { save(); nav.back() }) {
-            IconButton(onClick = { save(); Toast.makeText(context, "Widget guardado", Toast.LENGTH_SHORT).show() }) { Icon(Icons.Filled.Check, "Guardar") }
-        }
-        // Lienzo
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .clip(RoundedCornerShape(24.dp))
-                .background(PreviewBackdrop)
-                .padding(18.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            BoxWithConstraints(
+    BackHandler(enabled = dirty) { confirmExit = true }
+
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            BackTopBar(w.name, onBack = { if (dirty) confirmExit = true else nav.back() }) {
+                UndoButton(enabled = undo.canUndo) { doUndo() }
+                TextButton(onClick = { save(); Toast.makeText(context, "Widget guardado", Toast.LENGTH_SHORT).show() }) { Text("Guardar") }
+            }
+            if (showHint) {
+                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
+                    HelpTip("Arrastrá para mover · usá el círculo para cambiar el tamaño · tocá un elemento para editarlo")
+                    TextButton(onClick = {
+                        hints.edit().putBoolean(HINT_BUILDER_GESTURES, true).apply()
+                        showHint = false
+                    }, modifier = Modifier.padding(end = 8.dp)) { Text("Entendido") }
+                }
+            }
+            // Lienzo
+            Box(
                 Modifier
-                    .fillMaxWidth(if (w.aspect < 1.2f) 0.62f else 1f)
-                    .aspectRatio(w.aspect.coerceIn(0.4f, 4f))
-                    .heightIn(max = 260.dp)
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(PreviewBackdrop)
+                    .padding(18.dp),
+                contentAlignment = Alignment.Center
             ) {
-                val wPx = constraints.maxWidth.toFloat()
-                val hPx = constraints.maxHeight.toFloat()
-                CustomWidgetLive(w, Modifier.fillMaxSize(), interactive = false)
-                // Capa de selección y arrastre
-                w.elements.forEach { e ->
-                    val density = LocalDensity.current
-                    val isSel = e.id == selectedId
-                    Box(
-                        Modifier
-                            .offset(with(density) { (e.x * wPx).toDp() }, with(density) { (e.y * hPx).toDp() })
-                            .size(with(density) { (e.w * wPx).toDp() }, with(density) { (e.h * hPx).toDp() })
-                            .graphicsLayer { rotationZ = e.rotation }
-                            .then(if (isSel) Modifier.border(1.5.dp, Color.White, RoundedCornerShape(4.dp)) else Modifier)
-                            .pointerInput(e.id) { detectTapGestures { selectedId = e.id } }
-                            .pointerInput(e.id) {
-                                detectDragGestures(onDragStart = { selectedId = e.id }) { change, d ->
-                                    change.consume()
-                                    val cur = w.elements.firstOrNull { it.id == e.id } ?: return@detectDragGestures
-                                    updateEl(cur.copy(x = (cur.x + d.x / wPx).coerceIn(-cur.w * 0.5f, 1f - cur.w * 0.5f), y = (cur.y + d.y / hPx).coerceIn(-cur.h * 0.5f, 1f - cur.h * 0.5f)))
-                                }
-                            }
-                    ) {
-                        if (isSel) Box(
+                BoxWithConstraints(
+                    Modifier
+                        .fillMaxWidth(if (w.aspect < 1.2f) 0.62f else 1f)
+                        .aspectRatio(w.aspect.coerceIn(0.4f, 4f))
+                        .heightIn(max = 260.dp)
+                ) {
+                    val wPx = constraints.maxWidth.toFloat()
+                    val hPx = constraints.maxHeight.toFloat()
+                    CustomWidgetLive(w, Modifier.fillMaxSize(), interactive = false)
+                    if (w.elements.none { !it.hidden }) {
+                        Text(
+                            "Vacío: tocá «Agregar elemento»",
+                            color = Color.White,
+                            style = MaterialTheme.typography.bodySmall,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.align(Alignment.Center).padding(8.dp)
+                        )
+                    }
+                    // Capa de selección y arrastre
+                    w.elements.filterNot { it.hidden }.forEach { e ->
+                        val density = LocalDensity.current
+                        val isSel = e.id == selectedId
+                        Box(
                             Modifier
-                                .align(Alignment.BottomEnd)
-                                .offset(8.dp, 8.dp)
-                                .size(22.dp)
-                                .shadow(3.dp, CircleShape)
-                                .clip(CircleShape)
-                                .background(Color.White)
-                                .pointerInput(e.id + "r") {
-                                    detectDragGestures { change, d ->
-                                        change.consume()
+                                .offset(with(density) { (e.x * wPx).toDp() }, with(density) { (e.y * hPx).toDp() })
+                                .size(with(density) { (e.w * wPx).toDp() }, with(density) { (e.h * hPx).toDp() })
+                                .graphicsLayer { rotationZ = e.rotation }
+                                .then(if (isSel) Modifier.border(1.5.dp, Color.White, RoundedCornerShape(4.dp)) else Modifier)
+                                .pointerInput(e.id) { detectTapGestures { selectedId = e.id } }
+                                .pointerInput(e.id) {
+                                    detectDragGestures(onDragStart = { selectedId = e.id; beginGesture() }) { ch, d ->
+                                        ch.consume()
                                         val cur = w.elements.firstOrNull { it.id == e.id } ?: return@detectDragGestures
-                                        updateEl(cur.copy(w = (cur.w + d.x / wPx).coerceIn(0.03f, 1.5f), h = (cur.h + d.y / hPx).coerceIn(0.03f, 1.5f)))
+                                        updateElDuringGesture(cur.copy(x = (cur.x + d.x / wPx).coerceIn(-cur.w * 0.5f, 1f - cur.w * 0.5f), y = (cur.y + d.y / hPx).coerceIn(-cur.h * 0.5f, 1f - cur.h * 0.5f)))
                                     }
-                                },
-                            contentAlignment = Alignment.Center
-                        ) { Icon(Icons.Filled.OpenInFull, null, tint = Color(0xFF6C4CF5), modifier = Modifier.size(12.dp)) }
-                    }
-                }
-            }
-        }
-        Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box {
-                FilledTonalButton(onClick = { addMenu = true }) { Icon(Icons.Filled.Add, null); Spacer(Modifier.width(6.dp)); Text("Elemento") }
-                DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
-                    ElementType.entries.forEach { t ->
-                        DropdownMenuItem(text = { Text(t.label) }, onClick = {
-                            addMenu = false
-                            val e = newElement(t)
-                            w = w.copy(elements = w.elements + e)
-                            selectedId = e.id
-                            tab = 0
-                        })
-                    }
-                }
-            }
-            Spacer(Modifier.weight(1f))
-            if (selected != null) {
-                IconButton(onClick = {
-                    val copy = selected.copy(id = newId(), x = selected.x + 0.04f, y = selected.y + 0.04f)
-                    w = w.copy(elements = w.elements + copy); selectedId = copy.id
-                }) { Icon(Icons.Filled.ContentCopy, "Duplicar") }
-                IconButton(onClick = {
-                    val list = w.elements.toMutableList(); val i = list.indexOf(selected)
-                    if (i < list.lastIndex) { list.removeAt(i); list.add(i + 1, selected); w = w.copy(elements = list) }
-                }) { Icon(Icons.Filled.ArrowUpward, "Subir capa") }
-                IconButton(onClick = {
-                    val list = w.elements.toMutableList(); val i = list.indexOf(selected)
-                    if (i > 0) { list.removeAt(i); list.add(i - 1, selected); w = w.copy(elements = list) }
-                }) { Icon(Icons.Filled.ArrowDownward, "Bajar capa") }
-                IconButton(onClick = { w = w.copy(elements = w.elements - selected); selectedId = w.elements.lastOrNull()?.id }) { Icon(Icons.Filled.Delete, "Borrar") }
-            }
-        }
-        ScrollableTabRow(selectedTabIndex = tab, edgePadding = 12.dp, containerColor = MaterialTheme.colorScheme.background) {
-            listOf("Elemento", "Movimiento y toque", "Widget", "Capas").forEachIndexed { i, t -> Tab(tab == i, { tab = i }, text = { Text(t) }) }
-        }
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(vertical = 6.dp)) {
-            when (tab) {
-                0 -> if (selected == null) Panel { Text("Agregá o seleccioná un elemento.") } else ElementProps(selected, { updateEl(it) },
-                    pickMedia = { target -> pickTarget = target; mediaPicker.launch(PickVisualMediaRequest(if (target == "video") ActivityResultContracts.PickVisualMedia.VideoOnly else ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                    pickApp = { cb -> pickApp = cb })
-                1 -> if (selected == null) Panel { Text("Seleccioná un elemento.") } else MotionProps(selected, { updateEl(it) }) { cb -> pickApp = cb }
-                2 -> WidgetProps(w, onChange = { w = it }, pickBg = { pickTarget = "bg"; mediaPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, pickApp = { cb -> pickApp = cb })
-                3 -> Panel {
-                    w.elements.asReversed().forEach { e ->
-                        Row(
-                            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-                                .background(if (e.id == selectedId) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
-                                .clickable { selectedId = e.id; tab = 0 }
-                                .padding(10.dp)
+                                }
                         ) {
-                            Text(e.type.label, Modifier.weight(1f))
-                            Text(if (e.type == ElementType.TEXT) e.text.take(18) else "", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            if (isSel) Box(
+                                Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .offset(8.dp, 8.dp)
+                                    .size(22.dp)
+                                    .shadow(3.dp, CircleShape)
+                                    .clip(CircleShape)
+                                    .background(Color.White)
+                                    .pointerInput(e.id + "r") {
+                                        detectDragGestures(onDragStart = { beginGesture() }) { ch, d ->
+                                            ch.consume()
+                                            val cur = w.elements.firstOrNull { it.id == e.id } ?: return@detectDragGestures
+                                            updateElDuringGesture(cur.copy(w = (cur.w + d.x / wPx).coerceIn(0.03f, 1.5f), h = (cur.h + d.y / hPx).coerceIn(0.03f, 1.5f)))
+                                        }
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) { Icon(Icons.Filled.OpenInFull, null, tint = Color(0xFF6C4CF5), modifier = Modifier.size(12.dp)) }
                         }
                     }
                 }
             }
-        }
-        Surface(tonalElevation = 3.dp) {
-            Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = {
-                    val saved = save()
-                    val ok = WidgetUpdater.requestPinCustom(context, saved)
-                    Toast.makeText(context, if (ok) "Confirmá para agregarlo" else "Tu launcher no permite agregarlo desde acá", Toast.LENGTH_LONG).show()
-                }, modifier = Modifier.weight(1f)) { Text("Widget del sistema") }
-                if (StudioStore.appMode.launcherEnabled) Button(onClick = {
-                    val saved = save()
-                    val s = StudioStore.launcherSettings
-                    val ww = 0.92f
-                    val hh = (ww / saved.aspect * 0.46f).coerceIn(0.08f, 0.6f)
-                    val (x, y) = LauncherLayout.freeSpot(0, ww, hh, s)
-                    StudioStore.upsertItem(HomeItem(type = ItemType.CUSTOM_WIDGET, x = x, y = y, w = ww, h = hh, customWidgetId = saved.id, z = StudioStore.maxZ(0) + 1))
-                    Toast.makeText(context, "Agregado a Simón Launcher (página 1)", Toast.LENGTH_SHORT).show()
-                }, modifier = Modifier.weight(1f)) { Text("Al launcher") }
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box {
+                    FilledTonalButton(onClick = { addMenu = true }) { Icon(Icons.Filled.Add, null); Spacer(Modifier.width(6.dp)); Text("Agregar elemento") }
+                    DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
+                        ElementType.entries.forEach { t ->
+                            DropdownMenuItem(text = { Text(t.label) }, onClick = {
+                                addMenu = false
+                                val e = newElement(t)
+                                change(w.copy(elements = w.elements + e), coalesce = false)
+                                selectedId = e.id
+                                tab = 0
+                            })
+                        }
+                    }
+                }
+                Spacer(Modifier.weight(1f))
+                StartOverButton(message = "Se borran todos los elementos del widget. El tamaño y el fondo quedan como están. Podés deshacerlo.") {
+                    change(w.copy(elements = emptyList()), coalesce = false)
+                    selectedId = null
+                }
+            }
+            if (selected != null) {
+                val index = w.elements.indexOfFirst { it.id == selected.id }
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(selected.type.label, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 8.dp))
+                    TextButton(onClick = {
+                        val copy = selected.copy(id = newId(), x = selected.x + 0.04f, y = selected.y + 0.04f)
+                        change(w.copy(elements = w.elements + copy), coalesce = false)
+                        selectedId = copy.id
+                    }) { Text("Duplicar") }
+                    TextButton(onClick = { moveLayer(index, w.elements.lastIndex) }, enabled = index in 0 until w.elements.lastIndex) { Text("Traer al frente") }
+                    TextButton(onClick = { moveLayer(index, 0) }, enabled = index > 0) { Text("Mandar al fondo") }
+                    TextButton(onClick = { deleteElement(selected) }) { Text("Borrar", color = MaterialTheme.colorScheme.error) }
+                }
+            }
+            ScrollableTabRow(selectedTabIndex = tab, edgePadding = 12.dp, containerColor = MaterialTheme.colorScheme.background) {
+                listOf("Elemento", "Movimiento y toque", "Widget", "Capas").forEachIndexed { i, t -> Tab(tab == i, { tab = i }, text = { Text(t) }) }
+            }
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(vertical = 6.dp)) {
+                when (tab) {
+                    0 -> if (selected == null) Panel { Text("Tocá un elemento en el widget o agregá uno nuevo con «Agregar elemento».") } else {
+                        if (selected.hidden) Panel { Text("Este elemento está oculto. Mostralo desde la pestaña «Capas».", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        ElementProps(selected, { updateEl(it) },
+                            pickMedia = { target -> pickTarget = target; mediaPicker.launch(PickVisualMediaRequest(if (target == "video") ActivityResultContracts.PickVisualMedia.VideoOnly else ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                            pickApp = { cb -> pickApp = cb })
+                    }
+                    1 -> if (selected == null) Panel { Text("Tocá un elemento en el widget para elegir cómo se mueve y qué hace al tocarlo.") } else MotionProps(selected, { updateEl(it) }) { cb -> pickApp = cb }
+                    2 -> WidgetProps(w, onChange = { change(it) }, pickBg = { pickTarget = "bg"; mediaPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, pickApp = { cb -> pickApp = cb })
+                    else -> Panel {
+                        val list = w.elements
+                        if (list.isEmpty()) Text("Todavía no hay elementos. Tocá «Agregar elemento».")
+                        else Text("Lo de arriba de la lista se ve adelante en el widget.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        for (i in list.indices.reversed()) {
+                            val e = list[i]
+                            Column(
+                                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                                    .background(if (e.id == selectedId) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+                            ) {
+                                Row(
+                                    Modifier.fillMaxWidth().clickable { selectedId = e.id; tab = 0 }.padding(start = 10.dp, end = 10.dp, top = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(e.type.label + if (e.hidden) " (oculto)" else "", Modifier.weight(1f))
+                                    Text(if (e.type == ElementType.TEXT) e.text.take(18) else "", color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                                }
+                                Row(Modifier.padding(horizontal = 2.dp)) {
+                                    TextButton(onClick = { moveLayer(i, i + 1) }, enabled = i < list.lastIndex) { Text("Subir") }
+                                    TextButton(onClick = { moveLayer(i, i - 1) }, enabled = i > 0) { Text("Bajar") }
+                                    TextButton(onClick = { updateEl(e.copy(hidden = !e.hidden)) }) { Text(if (e.hidden) "Mostrar" else "Ocultar") }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Surface(tonalElevation = 3.dp) {
+                Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = {
+                        val savedW = save()
+                        val ok = WidgetUpdater.requestPinCustom(context, savedW)
+                        Toast.makeText(context, if (ok) "Confirmá en el cartel para agregarlo a tu inicio" else "Tu launcher no permite agregarlo desde acá: mantené presionada la pantalla de inicio → Widgets → Simón.", Toast.LENGTH_LONG).show()
+                    }, modifier = Modifier.weight(1f)) { Text("Agregar a mi inicio", textAlign = TextAlign.Center) }
+                    if (StudioStore.appMode.launcherEnabled) Button(onClick = {
+                        val savedW = save()
+                        val s = StudioStore.launcherSettings
+                        val ww = 0.92f
+                        val hh = (ww / savedW.aspect * 0.46f).coerceIn(0.08f, 0.6f)
+                        val (x, y) = LauncherLayout.freeSpot(0, ww, hh, s)
+                        StudioStore.upsertItem(HomeItem(type = ItemType.CUSTOM_WIDGET, x = x, y = y, w = ww, h = hh, customWidgetId = savedW.id, z = StudioStore.maxZ(0) + 1))
+                        Toast.makeText(context, "Agregado a Simón Launcher (página 1)", Toast.LENGTH_SHORT).show()
+                    }, modifier = Modifier.weight(1f)) { Text("Agregar a Simón Launcher", textAlign = TextAlign.Center) }
+                }
             }
         }
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 88.dp))
+    }
+
+    if (confirmExit) {
+        UnsavedChangesDialog(
+            onSave = { confirmExit = false; save(); nav.back() },
+            onDiscard = { confirmExit = false; nav.back() },
+            onDismiss = { confirmExit = false }
+        )
     }
 
     pickApp?.let { cb ->
@@ -367,7 +481,7 @@ private fun ElementProps(e: WElement, onChange: (WElement) -> Unit, pickMedia: (
             }
             ChoiceChips(FontStyle.entries, e.font, { it.label }, { onChange(e.copy(font = it)) })
             Panel {
-                ColorRow("Color", e.textColor) { onChange(e.copy(textColor = it)) }
+                ColorRow("Color principal (texto)", e.textColor) { onChange(e.copy(textColor = it)) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Negrita", Modifier.weight(1f)); Switch(e.bold, { onChange(e.copy(bold = it)) })
                 }
@@ -378,15 +492,15 @@ private fun ElementProps(e: WElement, onChange: (WElement) -> Unit, pickMedia: (
             ChoiceChips(listOf(0, 1, 2), e.align, { listOf("Izquierda", "Centro", "Derecha")[it] }, { onChange(e.copy(align = it)) })
         }
         ElementType.CLOCK -> Panel {
-            ColorRow("Esfera", e.fill1) { onChange(e.copy(fill1 = it)) }
-            ColorRow("Agujas", e.textColor) { onChange(e.copy(textColor = it)) }
-            ColorRow("Segundero", e.fill2) { onChange(e.copy(fill2 = it)) }
+            ColorRow("Color de fondo (esfera)", e.fill1) { onChange(e.copy(fill1 = it)) }
+            ColorRow("Color principal (agujas)", e.textColor) { onChange(e.copy(textColor = it)) }
+            ColorRow("Color de detalles (segundero)", e.fill2) { onChange(e.copy(fill2 = it)) }
         }
         ElementType.SHAPE -> {
             ChoiceChips(ShapeKind.entries, e.shape, { it.label }, { onChange(e.copy(shape = it)) })
             FillPanel(e, onChange)
             Panel {
-                ColorRow("Borde", e.strokeColor) { onChange(e.copy(strokeColor = it)) }
+                ColorRow("Color de detalles (borde)", e.strokeColor) { onChange(e.copy(strokeColor = it)) }
                 LabeledSlider("Grosor del borde", e.strokeWidth, 0f..1f, "${(e.strokeWidth * 100).roundToInt()}") { onChange(e.copy(strokeWidth = it)) }
                 if (e.shape == ShapeKind.ROUNDED) LabeledSlider("Esquinas", e.corner, 0f..0.5f, "${(e.corner * 100).roundToInt()}") { onChange(e.copy(corner = it)) }
             }
@@ -416,7 +530,7 @@ private fun ElementProps(e: WElement, onChange: (WElement) -> Unit, pickMedia: (
         ElementType.PROGRESS -> {
             ChoiceChips(ProgressSource.entries, e.progress, { it.label }, { onChange(e.copy(progress = it)) })
             ChoiceChips(ProgressStyle.entries, e.progressStyle, { it.label }, { onChange(e.copy(progressStyle = it)) })
-            FillPanel(e, onChange, secondLabel = "Color del fondo")
+            FillPanel(e, onChange, secondLabel = "Color de fondo")
             if (e.progress == ProgressSource.CUSTOM) Panel {
                 LabeledSlider("Valor", e.customValue, 0f..1f, "${(e.customValue * 100).roundToInt()}%") { onChange(e.copy(customValue = it)) }
             }
@@ -444,9 +558,9 @@ private fun ElementProps(e: WElement, onChange: (WElement) -> Unit, pickMedia: (
 }
 
 @Composable
-private fun FillPanel(e: WElement, onChange: (WElement) -> Unit, secondLabel: String = "Color 2") {
+private fun FillPanel(e: WElement, onChange: (WElement) -> Unit, secondLabel: String = "Segundo color") {
     Panel {
-        ColorRow("Color", e.fill1) { onChange(e.copy(fill1 = it)) }
+        ColorRow("Color principal", e.fill1) { onChange(e.copy(fill1 = it)) }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Degradado", Modifier.weight(1f)); Switch(e.gradient, { onChange(e.copy(gradient = it)) })
         }
@@ -513,9 +627,6 @@ private fun ActionData(action: TapAction, data: String, onChange: (String) -> Un
 
 @Composable
 private fun WidgetProps(w: CustomWidget, onChange: (CustomWidget) -> Unit, pickBg: () -> Unit, pickApp: ((String) -> Unit) -> Unit) {
-    val scope = rememberCoroutineScope()
-    var query by remember { mutableStateOf("") }
-    var results by remember { mutableStateOf<List<Place>>(emptyList()) }
     Panel {
         OutlinedTextField(w.name, { onChange(w.copy(name = it.take(30))) }, label = { Text("Nombre") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         Text("Forma del widget", style = MaterialTheme.typography.titleMedium)
@@ -524,36 +635,29 @@ private fun WidgetProps(w: CustomWidget, onChange: (CustomWidget) -> Unit, pickB
         when (it) { 1f -> "Cuadrado"; 2f -> "Ancho"; 2.15f -> "Mediano 4×2"; 3f -> "Tira"; 4f -> "Barra"; 0.75f -> "Alto"; else -> "Columna" }
     }, { onChange(w.copy(aspect = it)) })
     Panel {
-        ColorRow("Fondo 1", w.bg1) { onChange(w.copy(bg1 = it)) }
+        ColorRow("Color de fondo", w.bg1) { onChange(w.copy(bg1 = it)) }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Degradado", Modifier.weight(1f)); Switch(w.bgGradient, { onChange(w.copy(bgGradient = it)) })
         }
         if (w.bgGradient) {
-            ColorRow("Fondo 2", w.bg2) { onChange(w.copy(bg2 = it)) }
+            ColorRow("Segundo color de fondo", w.bg2) { onChange(w.copy(bg2 = it)) }
             LabeledSlider("Dirección", w.bgAngle.toFloat(), 0f..360f, "${w.bgAngle}°") { onChange(w.copy(bgAngle = it.roundToInt())) }
         }
         LabeledSlider("Opacidad del color", w.bgAlpha, 0f..1f, "${(w.bgAlpha * 100).roundToInt()}%") { onChange(w.copy(bgAlpha = it)) }
         LabeledSlider("Esquinas", w.corner, 0f..0.5f, "${(w.corner * 100).roundToInt()}") { onChange(w.copy(corner = it)) }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilledTonalButton(onClick = pickBg) { Text(if (w.bgImage == null) "Foto de fondo" else "Cambiar foto") }
-            if (w.bgImage != null) OutlinedButton(onClick = { onChange(w.copy(bgImage = null)) }) { Text("Quitar") }
+            if (w.bgImage != null) OutlinedButton(onClick = { onChange(w.copy(bgImage = null)) }) { Text("Quitar foto") }
         }
     }
-    Panel {
-        Text(if (w.city.isBlank()) "Ciudad para el clima" else "Ciudad: ${w.city}", style = MaterialTheme.typography.titleMedium)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(query, { query = it }, label = { Text("Buscar ciudad") }, singleLine = true, modifier = Modifier.weight(1f))
-            TextButton(onClick = { scope.launch { results = WeatherService.searchCity(query) } }) { Text("Buscar") }
-        }
-        results.forEach { p ->
-            Text(p.label, modifier = Modifier.fillMaxWidth().clickable {
-                onChange(w.copy(city = p.name, lat = p.lat, lon = p.lon)); results = emptyList()
-                scope.launch { WeatherService.fetch(p.lat, p.lon)?.let { Repository.putWeather(p.lat, p.lon, it) } }
-            }.padding(vertical = 8.dp))
-        }
-    }
-    Panel { Text("Al tocar el widget del sistema", style = MaterialTheme.typography.titleMedium) }
-    ChoiceChips(TapAction.entries.filter { it != TapAction.OPEN_DRAWER }, w.action, { it.label }, { onChange(w.copy(action = it)) })
+    CitySearchPanel(
+        currentCity = w.city,
+        title = "Ciudad para el clima",
+        onPicked = { p -> onChange(w.copy(city = p.name, lat = p.lat, lon = p.lon)) }
+    )
+    Panel { Text("Al tocar el widget en tu pantalla de inicio", style = MaterialTheme.typography.titleMedium) }
+    // En el widget del sistema, «Abrir Simón» abre este mismo editor.
+    ChoiceChips(TapAction.entries.filter { it != TapAction.OPEN_DRAWER }, w.action, { if (it == TapAction.OPEN_SIMON) "Abrir el editor de Simón" else it.label }, { onChange(w.copy(action = it)) })
     ActionData(w.action, w.actionData, { onChange(w.copy(actionData = it)) }, pickApp)
     Spacer(Modifier.height(16.dp))
 }

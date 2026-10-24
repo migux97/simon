@@ -23,38 +23,51 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Brush
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Wallpaper
 import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.migux97.simon.data.Catalog
+import com.migux97.simon.data.Lookup
+import com.migux97.simon.data.SceneType
 import com.migux97.simon.data.Repository
 import com.migux97.simon.data.ThemePack
 import com.migux97.simon.data.WidgetSize
 import com.migux97.simon.ui.Nav
 import com.migux97.simon.ui.components.GradientBadge
 import com.migux97.simon.ui.components.Panel
+import com.migux97.simon.ui.components.PhoneWallpaperBackdrop
 import com.migux97.simon.ui.components.SceneThumb
 import com.migux97.simon.ui.components.SectionHeader
 import com.migux97.simon.ui.components.StaticThumb
 import com.migux97.simon.ui.components.WidgetOnBackdrop
 import com.migux97.simon.ui.components.WidgetPreview
 import com.migux97.simon.ui.theme.SimonGradient
+import com.migux97.simon.wallpaper.LiveWallpaper
+import com.migux97.simon.wallpaper.StaticWallpapers
 
 @Composable
 fun HomeScreen(nav: Nav) {
@@ -77,6 +90,7 @@ fun HomeScreen(nav: Nav) {
                 Text("Hacé tu pantalla única", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+        item { MyScreenNowCard(nav) }
         item {
             Row(
                 Modifier
@@ -273,5 +287,98 @@ private fun ModeCard(title: String, text: String, action: String, brush: Brush, 
         Text(title, color = Color.White, style = MaterialTheme.typography.titleLarge)
         Text(text, color = Color.White.copy(alpha = 0.9f), style = MaterialTheme.typography.bodyMedium)
         Text(action, color = Color.White, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp))
+    }
+}
+
+/** "Tu pantalla ahora": lo que ya tenés puesto, para seguir editando desde ahí. */
+@Composable
+private fun MyScreenNowCard(nav: Nav) {
+    val context = LocalContext.current
+    val applied by Repository.appliedTheme.collectAsStateWithLifecycle()
+    val bindings by Repository.bindings.collectAsStateWithLifecycle()
+    val icons by Repository.icons.collectAsStateWithLifecycle()
+    val live by Repository.live.collectAsStateWithLifecycle()
+    val current by Repository.currentStatic.collectAsStateWithLifecycle()
+    var resumeTick by remember { mutableIntStateOf(0) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeTick++ }
+    val liveActive = remember(resumeTick) { LiveWallpaper.isActive(context) }
+    val staticOnHome = remember(resumeTick, current) { StaticWallpapers.isOnHomeNow(context, current) }
+    val themeName = applied?.let { id -> Lookup.theme(id)?.name }
+    val widgetCount = bindings.size
+    val iconCount = remember(icons) { icons.distinctBy { it.packageName }.size }
+    val activeLive = if (liveActive) live else null
+    val staticNow = if (!liveActive && staticOnHome) current else null
+
+    val staticWp = staticNow?.staticWallpaper
+    val photoNow = staticNow?.photoPath
+    val wallpaperText = when {
+        activeLive != null -> "Animado de Simón: «${activeLive.name}»"
+        staticWp != null -> "Estático de Simón: «${staticWp.name}»"
+        photoNow != null -> "Una foto tuya, puesta con Simón"
+        else -> "Tu fondo de siempre (no es de Simón)"
+    }
+    val appliedId = applied
+    val onEditTheme: (() -> Unit)? = appliedId?.let { tid -> { nav.theme(tid) } }
+
+    Row(
+        Modifier
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(26.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier
+                .width(70.dp)
+                .aspectRatio(9f / 18f)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color.Black)
+                .clickable { nav.tab("wallpapers") }
+        ) {
+            if (activeLive != null) {
+                if (activeLive.scene == SceneType.VIDEO) {
+                    Icon(Icons.Filled.Movie, contentDescription = null, tint = Color.White, modifier = Modifier.align(Alignment.Center).size(28.dp))
+                } else {
+                    SceneThumb(activeLive, Modifier.fillMaxSize())
+                }
+            } else {
+                // Los colores reales de tu fondo (se vuelven a leer al volver a la app).
+                key(resumeTick) { PhoneWallpaperBackdrop(Modifier.fillMaxSize()) }
+            }
+        }
+        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+            Text("Tu pantalla ahora", style = MaterialTheme.typography.titleMedium)
+            ScreenNowLine("Fondo", wallpaperText) { nav.tab("wallpapers") }
+            ScreenNowLine("Tema", themeName ?: "Ninguno aplicado", onEditTheme)
+            ScreenNowLine(
+                "Widgets",
+                when (widgetCount) {
+                    0 -> "Ninguno de Simón en tu inicio"
+                    1 -> "1 de Simón en tu inicio"
+                    else -> "$widgetCount de Simón en tu inicio"
+                }
+            ) { nav.tab("widgets") }
+            ScreenNowLine(
+                "Íconos",
+                when (iconCount) {
+                    0 -> "Ninguno personalizado"
+                    1 -> "1 app personalizada"
+                    else -> "$iconCount apps personalizadas"
+                }
+            ) { nav.go("icons") }
+        }
+    }
+}
+
+@Composable
+private fun ScreenNowLine(title: String, value: String, onEdit: (() -> Unit)?) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            Text(value, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+        }
+        if (onEdit != null) TextButton(onClick = onEdit) { Text("Editar") }
     }
 }

@@ -1,6 +1,15 @@
 package com.migux97.simon.launcher
 
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Dock
+import androidx.compose.runtime.rememberCoroutineScope
+import com.migux97.simon.ui.components.ConfirmDialog
+import com.migux97.simon.ui.components.HelpTip
+import kotlinx.coroutines.launch
 import android.graphics.Bitmap
 import android.widget.FrameLayout
 import android.widget.VideoView
@@ -186,7 +195,15 @@ private fun FreeItem(item: HomeItem, wPx: Float, hPx: Float, settings: LauncherS
     val wDp = with(density) { (live.w * wPx).toDp() }
     val hDp = with(density) { (live.h * hPx).toDp() }
 
-    fun commit() = StudioStore.upsertItem(LauncherLayout.snap(live, settings).also { live = it })
+    // Antes de guardar se anota cómo estaba, para poder deshacer el movimiento.
+    fun commit() {
+        val snapped = LauncherLayout.snap(live, settings)
+        live = snapped
+        val stored = StudioStore.items.firstOrNull { it.id == item.id }
+        if (stored != null && stored == snapped) return
+        ui.snapshot()
+        StudioStore.upsertItem(snapped)
+    }
 
     Box(
         Modifier
@@ -429,7 +446,8 @@ fun Dock(settings: LauncherSettings, ui: LauncherUi) {
                     .motion(StudioStore.override(app.key)?.motion ?: settings.globalMotion)
                     .pointerInput(app.key) {
                         detectTapGestures(
-                            onTap = { AppCatalog.launch(context, app) },
+                            // En modo edición, tocar el dock abre su editor.
+                            onTap = { if (ui.editMode) ui.dockEditor = true else AppCatalog.launch(context, app) },
                             onLongPress = { ui.appMenu = app; ui.appMenuItem = null }
                         )
                     }
@@ -442,69 +460,107 @@ fun Dock(settings: LauncherSettings, ui: LauncherUi) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun EditBar(ui: LauncherUi, settings: LauncherSettings, pager: PagerState, onAddPage: () -> Unit) {
+fun EditBar(ui: LauncherUi, settings: LauncherSettings, items: List<HomeItem>, pager: PagerState, onAddPage: () -> Unit) {
     val context = LocalContext.current
-    val selected = StudioStore.items.firstOrNull { it.id == ui.selectedId }
-    Box(Modifier.fillMaxSize()) {
+    val scope = rememberCoroutineScope()
+    val selected = items.firstOrNull { it.id == ui.selectedId }
+    var askDeletePage by remember { mutableStateOf(false) }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(top = 8.dp)
+    ) {
         Surface(
             color = Color(0xEE1C1530),
             shape = RoundedCornerShape(26.dp),
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .statusBarsPadding()
-                .padding(top = 8.dp, start = 10.dp, end = 10.dp)
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp)
         ) {
             Row(Modifier.padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (selected == null) {
-                    BarButton(Icons.Filled.Add, "Agregar") { ui.addSheet = true }
-                    BarButton(Icons.Filled.AddBox, "Página") { onAddPage() }
-                    BarButton(Icons.Filled.Settings, "Ajustes") {
-                        context.startActivity(
-                            android.content.Intent(context, com.migux97.simon.MainActivity::class.java)
-                                .putExtra(com.migux97.simon.MainActivity.EXTRA_ROUTE, "launcherSettings")
-                                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                        )
-                    }
-                    Text("Página ${pager.currentPage + 1}", color = Color.White, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 8.dp))
-                } else {
-                    BarButton(Icons.Filled.Tune, "Editar") { ui.editItem = selected }
-                    BarButton(Icons.Filled.FlipToFront, "Adelante") { LauncherLayout.bringToFront(selected) }
-                    BarButton(Icons.Filled.FlipToBack, "Atrás") { LauncherLayout.sendToBack(selected) }
-                    BarButton(Icons.Filled.ContentCopy, "Duplicar") { LauncherLayout.duplicate(selected) }
-                    BarButton(if (selected.locked) Icons.Filled.Lock else Icons.Filled.LockOpen, "Fijar") {
-                        StudioStore.upsertItem(selected.copy(locked = !selected.locked))
-                    }
-                    BarButton(Icons.Filled.Delete, "Quitar") {
-                        if (selected.type == ItemType.SYSTEM_WIDGET) WidgetHost.delete(context, selected.appWidgetId)
-                        StudioStore.removeItem(selected.id)
-                        ui.selectedId = null
+                Row(
+                    Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (selected == null) {
+                        BarButton(Icons.Filled.Add, "Agregar") { ui.addSheet = true }
+                        BarButton(Icons.AutoMirrored.Filled.Undo, "Deshacer", enabled = ui.undo.canUndo) { ui.undoLast() }
+                        BarButton(Icons.Filled.Dock, "Editar dock") { ui.dockEditor = true }
+                        BarButton(Icons.Filled.AddBox, "Nueva página") { onAddPage() }
+                        BarButton(Icons.Filled.DeleteSweep, "Borrar página") { askDeletePage = true }
+                        BarButton(Icons.Filled.Settings, "Ajustes") {
+                            context.startActivity(
+                                android.content.Intent(context, com.migux97.simon.MainActivity::class.java)
+                                    .putExtra(com.migux97.simon.MainActivity.EXTRA_ROUTE, "launcherSettings")
+                                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        }
+                    } else {
+                        BarButton(Icons.Filled.Tune, "Editar") { ui.editItem = selected }
+                        BarButton(Icons.AutoMirrored.Filled.Undo, "Deshacer", enabled = ui.undo.canUndo) { ui.undoLast() }
+                        BarButton(Icons.Filled.ContentCopy, "Duplicar") {
+                            if (selected.type == ItemType.SYSTEM_WIDGET) {
+                                android.widget.Toast.makeText(context, "Los widgets de otras apps no se pueden duplicar", android.widget.Toast.LENGTH_SHORT).show()
+                            } else {
+                                ui.snapshot(); LauncherLayout.duplicate(selected)
+                            }
+                        }
+                        BarButton(Icons.Filled.FlipToFront, "Traer al frente") { ui.snapshot(); LauncherLayout.bringToFront(selected) }
+                        BarButton(Icons.Filled.FlipToBack, "Mandar al fondo") { ui.snapshot(); LauncherLayout.sendToBack(selected) }
+                        BarButton(if (selected.locked) Icons.Filled.LockOpen else Icons.Filled.Lock, if (selected.locked) "Desbloquear" else "Bloquear posición") {
+                            ui.snapshot()
+                            StudioStore.upsertItem(selected.copy(locked = !selected.locked))
+                        }
+                        BarButton(Icons.Filled.Delete, "Quitar") { ui.remove(selected) }
                     }
                 }
                 BarButton(Icons.Filled.Check, "Listo") { ui.editMode = false; ui.selectedId = null }
             }
         }
-        Text(
-            if (selected == null) "Arrastrá cualquier cosa · tocá para seleccionar · doble toque para propiedades"
-            else "Arrastrá para mover · manijas para tamaño y giro",
-            color = Color.White,
-            fontSize = 12.sp,
-            textAlign = TextAlign.Center,
-            style = TextStyle(shadow = Shadow(Color.Black, blurRadius = 8f)),
-            modifier = Modifier.align(Alignment.Center).padding(horizontal = 30.dp).graphicsLayer { alpha = 0.7f }
+        HelpTip(
+            when {
+                selected == null -> "Página ${pager.currentPage + 1} · Arrastrá cualquier cosa para moverla · tocá algo para elegirlo y después «Editar» (o tocalo dos veces)"
+                selected.locked -> "Está bloqueado en su lugar: tocá «Desbloquear» para poder moverlo."
+                else -> "Arrastrá para mover · usá los círculos para agrandar o girar · «Editar» para más opciones"
+            },
+            Modifier.padding(top = 6.dp)
+        )
+    }
+    if (askDeletePage) {
+        val page = pager.currentPage
+        val only = settings.pages <= 1
+        ConfirmDialog(
+            title = if (only) "¿Vaciar la página?" else "¿Borrar la página ${page + 1}?",
+            message = if (only) "Es la única página: se quita todo lo que tiene." else "Se borra la página ${page + 1} con todo lo que tiene y las siguientes se corren un lugar.",
+            confirm = if (only) "Vaciar" else "Borrar página",
+            onDismiss = { askDeletePage = false },
+            onConfirm = {
+                askDeletePage = false
+                ui.selectedId = null
+                LauncherLayout.deletePage(context, page)
+                // Las posiciones cambiaron: lo anterior ya no se puede deshacer.
+                ui.undo.clear()
+                if (page > 0) scope.launch { pager.animateScrollToPage(page - 1) }
+            }
         )
     }
 }
 
 @Composable
-private fun BarButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
+internal fun BarButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    val tint = if (enabled) Color.White else Color.White.copy(alpha = 0.35f)
     Column(
         Modifier
             .clip(RoundedCornerShape(14.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 6.dp, vertical = 6.dp),
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Icon(icon, label, tint = Color.White, modifier = Modifier.size(22.dp))
-        Text(label, color = Color.White, fontSize = 10.sp)
+        Icon(icon, null, tint = tint, modifier = Modifier.size(22.dp))
+        Text(label, color = tint, fontSize = 11.sp, maxLines = 1)
     }
 }

@@ -60,8 +60,13 @@ object LauncherLayout {
         return AppCatalog.apps.value.firstOrNull { it.packageName == pkg }?.key
     }
 
-    /** Primera vez que se abre el launcher: armar una pantalla linda por defecto. */
-    fun createDefault(context: Context) {
+    /**
+     * Arma la pantalla del launcher. Con [withApps] pone un reloj y tus apps
+     * (las que actualizaste o instalaste hace poco primero); sin eso deja las
+     * páginas vacías y solo arma el dock. Nunca toca la capa, la pantalla de
+     * bloqueo ni la de carga (páginas negativas).
+     */
+    fun createDefault(context: Context, withApps: Boolean = true) {
         val apps = AppCatalog.apps.value
         if (apps.isEmpty()) return
         val s = StudioStore.launcherSettings
@@ -71,25 +76,83 @@ object LauncherLayout {
             keyFor(context, Intent(MediaStore.ACTION_IMAGE_CAPTURE)),
             keyFor(context, Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com")))
         ).distinct()
+        // Lo de las capas especiales se conserva; los widgets del sistema que se van se liberan.
+        val keep = StudioStore.items.filter { it.page < 0 }
+        StudioStore.items.filter { it.page >= 0 && it.type == ItemType.SYSTEM_WIDGET }
+            .forEach { WidgetHost.delete(context, it.appWidgetId) }
         val items = mutableListOf<HomeItem>()
-        // Reloj grande arriba
-        val clockTemplate = Catalog.templatesFor(WidgetKind.DIGITAL_CLOCK, WidgetSize.MEDIUM).first()
-        val clock = clockTemplate.copy(id = newId(), bgStyle = com.migux97.simon.data.BgStyle.GLASS)
-        Repository.saveDesign(clock)
-        items += HomeItem(type = ItemType.DESIGN_WIDGET, page = 0, x = 0.04f, y = 0.07f, w = 0.92f, h = 0.2f, designId = clock.id, z = 1)
-        // Primeras apps en grilla
-        val cw = cellW(s); val ch = cellH(s)
-        apps.filter { it.key !in dock && it.packageName != context.packageName }.take(8).forEachIndexed { i, app ->
-            val col = i % s.gridColumns
-            val row = i / s.gridColumns
-            items += HomeItem(type = ItemType.APP, page = 0, x = col * cw, y = 0.32f + row * ch, w = cw, h = ch, appKey = app.key, z = 2 + i)
+        if (withApps) {
+            // Reloj grande arriba
+            val clockTemplate = Catalog.templatesFor(WidgetKind.DIGITAL_CLOCK, WidgetSize.MEDIUM).first()
+            val clock = clockTemplate.copy(id = newId(), bgStyle = com.migux97.simon.data.BgStyle.GLASS)
+            Repository.saveDesign(clock)
+            items += HomeItem(type = ItemType.DESIGN_WIDGET, page = 0, x = 0.04f, y = 0.07f, w = 0.92f, h = 0.2f, designId = clock.id, z = 1)
+            // Tus apps: primero las que instalaste o actualizaste hace poco (sin pedir permisos de uso).
+            val cols = s.gridColumns.coerceAtLeast(1)
+            val cw = cellW(s); val ch = cellH(s)
+            val limit = minOf(12, cols * 3)
+            val pm = context.packageManager
+            val candidates = apps.filter { it.key !in dock && it.packageName != context.packageName }
+            val updated = candidates.map { it.packageName }.distinct().associateWith { pkg ->
+                try {
+                    @Suppress("DEPRECATION")
+                    pm.getPackageInfo(pkg, 0).lastUpdateTime
+                } catch (_: Exception) {
+                    0L
+                }
+            }
+            candidates.sortedByDescending { updated[it.packageName] ?: 0L }.take(limit).forEachIndexed { i, app ->
+                val col = i % cols
+                val row = i / cols
+                items += HomeItem(type = ItemType.APP, page = 0, x = col * cw, y = 0.32f + row * ch, w = cw, h = ch, appKey = app.key, z = 2 + i)
+            }
+            // Simón en la segunda página
+            if (s.pages >= 2) apps.firstOrNull { it.packageName == context.packageName }?.let {
+                items += HomeItem(type = ItemType.APP, page = 1, x = 0f, y = 0.06f, w = cw, h = ch, appKey = it.key, z = 1)
+            }
         }
-        // Simón en la segunda página
-        apps.firstOrNull { it.packageName == context.packageName }?.let {
-            items += HomeItem(type = ItemType.APP, page = 1, x = 0f, y = 0.06f, w = cw, h = ch, appKey = it.key, z = 1)
-        }
-        StudioStore.setItems(items)
+        StudioStore.setItems(keep + items)
         StudioStore.updateLauncher { it.copy(dockApps = dock, initialized = true) }
+    }
+
+    /** Borra todo lo de las páginas del launcher. La capa, el bloqueo y la carga no se tocan. */
+    fun clearLauncherPages(context: Context) {
+        StudioStore.items.filter { it.page >= 0 && it.type == ItemType.SYSTEM_WIDGET }
+            .forEach { WidgetHost.delete(context, it.appWidgetId) }
+        StudioStore.setItems(StudioStore.items.filter { it.page < 0 })
+        StudioStore.updateLauncher { it.copy(initialized = true) }
+    }
+
+    /** Quita todo lo de una sola página (sirve para cualquier capa). */
+    fun clearPage(context: Context, page: Int) {
+        StudioStore.items.filter { it.page == page && it.type == ItemType.SYSTEM_WIDGET }
+            .forEach { WidgetHost.delete(context, it.appWidgetId) }
+        StudioStore.setItems(StudioStore.items.filter { it.page != page })
+    }
+
+    /**
+     * Cambia la cantidad de páginas. Si sacás páginas, lo que tenían pasa a la
+     * última que queda (nada se pierde).
+     */
+    fun setPageCount(n: Int) {
+        val count = n.coerceIn(1, 12)
+        val items = StudioStore.items
+        if (items.any { it.page >= count }) {
+            var z = StudioStore.maxZ(count - 1)
+            StudioStore.setItems(items.map { if (it.page >= count) it.copy(page = count - 1, z = ++z) else it })
+        }
+        StudioStore.updateLauncher { it.copy(pages = count) }
+    }
+
+    /** Borra una página con lo que tiene y corre las siguientes un lugar. */
+    fun deletePage(context: Context, page: Int) {
+        if (page < 0) return
+        StudioStore.items.filter { it.page == page && it.type == ItemType.SYSTEM_WIDGET }
+            .forEach { WidgetHost.delete(context, it.appWidgetId) }
+        StudioStore.setItems(
+            StudioStore.items.filter { it.page != page }.map { if (it.page > page) it.copy(page = it.page - 1) else it }
+        )
+        StudioStore.updateLauncher { it.copy(pages = (it.pages - 1).coerceAtLeast(1)) }
     }
 
     fun bringToFront(item: HomeItem) = StudioStore.upsertItem(item.copy(z = StudioStore.maxZ(item.page) + 1))

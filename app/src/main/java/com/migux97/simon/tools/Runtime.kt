@@ -18,7 +18,9 @@ import android.widget.Toast
 import com.migux97.simon.data.ActionType
 import com.migux97.simon.data.EffectConfig
 import com.migux97.simon.data.EffectStyle
+import com.migux97.simon.data.ImageStore
 import com.migux97.simon.data.Lookup
+import com.migux97.simon.data.MediaLibrary
 import com.migux97.simon.data.Repository
 import com.migux97.simon.data.Routine
 import com.migux97.simon.data.RoutineAction
@@ -95,26 +97,50 @@ object SimonRuntime {
 
 object RoutineEngine {
 
+    /** Prefijos de [RoutineAction.value] para "Poner un fondo fijo" con una foto o un dibujo propio. */
+    const val PHOTO_PREFIX = "photo:"
+    const val DRAWING_PREFIX = "drawing:"
+
     fun trigger(context: Context, type: TriggerType) {
         StudioStore.routineList.filter { it.enabled && it.trigger.type == type }.forEach { run(context, it) }
     }
 
-    fun run(context: Context, routine: Routine) {
+    /**
+     * Ejecuta las acciones. Con [record] anota la hora en la rutina guardada
+     * (solo si ya existe: probar una rutina sin guardar no la crea).
+     */
+    fun run(context: Context, routine: Routine, record: Boolean = true) {
         routine.actions.forEach { a ->
             try {
                 runAction(context, a)
             } catch (_: Exception) {
             }
         }
-        StudioStore.saveRoutine(routine.copy(lastRun = System.currentTimeMillis()))
+        if (record) {
+            val saved = StudioStore.routineList.firstOrNull { it.id == routine.id }
+            if (saved != null) StudioStore.saveRoutine(saved.copy(lastRun = System.currentTimeMillis()))
+        }
     }
 
     private fun runAction(context: Context, a: RoutineAction) {
         when (a.type) {
-            ActionType.STATIC_WALLPAPER -> Lookup.static(a.value)?.let { sw ->
-                thread {
-                    val (w, h) = StaticWallpapers.screenSize(context)
-                    StaticWallpapers.apply(context, StaticWallpapers.render(sw, w, h), WallpaperTarget.entries[a.number.coerceIn(0, 2)])
+            ActionType.STATIC_WALLPAPER -> {
+                val target = WallpaperTarget.entries[a.number.coerceIn(0, WallpaperTarget.entries.lastIndex)]
+                when {
+                    a.value.startsWith(PHOTO_PREFIX) -> thread {
+                        val (w, h) = StaticWallpapers.screenSize(context)
+                        ImageStore.load(a.value.removePrefix(PHOTO_PREFIX), maxOf(w, h))?.let { StaticWallpapers.apply(context, it, target) }
+                    }
+                    a.value.startsWith(DRAWING_PREFIX) -> thread {
+                        val (w, h) = StaticWallpapers.screenSize(context)
+                        MediaLibrary.loadDrawing(a.value.removePrefix(DRAWING_PREFIX), maxOf(w, h))?.let { StaticWallpapers.apply(context, it, target) }
+                    }
+                    else -> Lookup.static(a.value)?.let { sw ->
+                        thread {
+                            val (w, h) = StaticWallpapers.screenSize(context)
+                            StaticWallpapers.apply(context, StaticWallpapers.render(sw, w, h), target)
+                        }
+                    }
                 }
             }
             ActionType.LIVE_WALLPAPER -> Lookup.live(a.value)?.let {

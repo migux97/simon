@@ -224,3 +224,66 @@ fun StickerAttachEditor(list: List<StickerAttach>, onChange: (List<StickerAttach
         picking = false
     }
 }
+
+/**
+ * Editar un sticker propio: nombre y, si es prediseñado, sus colores y borde.
+ * «Borrar» es secundario y pide confirmación.
+ */
+@Composable
+fun StickerEditDialog(info: StickerInfo, onDismiss: () -> Unit) {
+    var name by remember(info.id) { mutableStateOf(info.name) }
+    var c1 by remember(info.id) { mutableIntStateOf(info.color1) }
+    var c2 by remember(info.id) { mutableIntStateOf(info.color2) }
+    var outline by remember(info.id) { mutableStateOf(info.outline) }
+    var askDelete by remember(info.id) { mutableStateOf(false) }
+    val isBuiltin = info.kind == StickerKind.BUILTIN && info.builtin != null
+    val preview = info.copy(name = name, color1 = c1, color2 = c2, outline = outline)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Editar sticker") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    StickerThumb(preview, Modifier.size(72.dp))
+                    Text(
+                        info.kind.label,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 12.dp)
+                    )
+                }
+                androidx.compose.material3.OutlinedTextField(
+                    name, { name = it.take(30) },
+                    label = { Text("Nombre") }, singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+                if (isBuiltin) {
+                    ColorRow("Color principal", c1) { c1 = it }
+                    ColorRow("Color de detalles", c2) { c2 = it }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Borde blanco", Modifier.weight(1f)); Switch(outline, { outline = it })
+                    }
+                }
+                TextButton(onClick = { askDelete = true }) { Text("Borrar sticker", color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                StudioStore.saveSticker(info.copy(name = name.ifBlank { info.name }, color1 = c1, color2 = c2, outline = outline))
+                onDismiss()
+            }) { Text("Guardar") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } }
+    )
+    if (askDelete) ConfirmDialog(
+        title = "¿Borrar «${info.name}»?",
+        message = "Donde lo tengas pegado (íconos, widgets, launcher) va a dejar de verse.",
+        confirm = "Borrar",
+        onDismiss = { askDelete = false },
+        onConfirm = {
+            askDelete = false
+            StudioStore.deleteSticker(info.id)
+            onDismiss()
+        }
+    )
+}

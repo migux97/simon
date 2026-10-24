@@ -20,6 +20,21 @@ data class WeatherInfo(
 )
 
 /**
+ * El último fondo estático o foto que puso Simón. Guarda los ids que devuelve
+ * Android al ponerlo, para saber después si sigue puesto o si lo cambiaron.
+ */
+@Serializable
+data class AppliedWallpaper(
+    val staticWallpaper: StaticWallpaper? = null,
+    val photoPath: String? = null,
+    /** Nombre de [com.migux97.simon.wallpaper.WallpaperTarget]: HOME, LOCK o BOTH. */
+    val target: String = "BOTH",
+    val homeId: Int = 0,
+    val lockId: Int = 0,
+    val appliedAt: Long = 0L
+)
+
+/**
  * Almacenamiento local de Simón. Usa SharedPreferences con JSON porque se lee
  * desde receptores de widgets y desde el servicio de fondo animado, donde
  * conviene un acceso sincrónico. La UI observa los StateFlow.
@@ -36,6 +51,10 @@ object Repository {
     private const val KEY_THEME = "applied_theme"
     private const val KEY_WEATHER = "weather"
     private const val KEY_FAVORITES = "favorites"
+    private const val KEY_SAVED_STATIC = "saved_static"
+    private const val KEY_CURRENT_STATIC = "current_static"
+    private const val KEY_APPLIED_PHOTOS = "applied_photos"
+    private const val MAX_PHOTOS = 24
 
     private val _designs = MutableStateFlow<List<WidgetDesign>>(emptyList())
     val designs: StateFlow<List<WidgetDesign>> = _designs.asStateFlow()
@@ -58,6 +77,18 @@ object Repository {
     private val _favorites = MutableStateFlow<Set<String>>(emptySet())
     val favorites: StateFlow<Set<String>> = _favorites.asStateFlow()
 
+    private val _savedStatic = MutableStateFlow<List<StaticWallpaper>>(emptyList())
+    /** Fondos estáticos que el usuario guardó (personalizados o creados). */
+    val savedStatic: StateFlow<List<StaticWallpaper>> = _savedStatic.asStateFlow()
+
+    private val _currentStatic = MutableStateFlow<AppliedWallpaper?>(null)
+    /** Último fondo estático o foto que puso Simón (puede que ya no esté puesto). */
+    val currentStatic: StateFlow<AppliedWallpaper?> = _currentStatic.asStateFlow()
+
+    private val _appliedPhotos = MutableStateFlow<List<String>>(emptyList())
+    /** Copias de las fotos que el usuario puso como fondo con Simón (la más nueva primero). */
+    val appliedPhotos: StateFlow<List<String>> = _appliedPhotos.asStateFlow()
+
     private var weather: Map<String, WeatherInfo> = emptyMap()
 
     @Volatile
@@ -79,6 +110,9 @@ object Repository {
             _appliedTheme.value = prefs.getString(KEY_THEME, null)
             _favorites.value = prefs.getStringSet(KEY_FAVORITES, emptySet())?.toSet() ?: emptySet()
             weather = read(KEY_WEATHER) ?: emptyMap()
+            _savedStatic.value = read(KEY_SAVED_STATIC) ?: emptyList()
+            _currentStatic.value = read(KEY_CURRENT_STATIC)
+            _appliedPhotos.value = read(KEY_APPLIED_PHOTOS) ?: emptyList()
             initialized = true
         }
     }
@@ -174,11 +208,73 @@ object Repository {
         write(KEY_SAVED_LIVE, list)
     }
 
+    // ---- Fondos estáticos ----
+
+    fun staticById(id: String): StaticWallpaper? = _savedStatic.value.firstOrNull { it.id == id }
+
+    /** Agrega o actualiza un fondo estático guardado. */
+    @Synchronized
+    fun saveStatic(wallpaper: StaticWallpaper) {
+        val list = _savedStatic.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == wallpaper.id }
+        if (idx >= 0) list[idx] = wallpaper else list.add(0, wallpaper)
+        _savedStatic.value = list
+        write(KEY_SAVED_STATIC, list)
+    }
+
+    @Synchronized
+    fun deleteSavedStatic(id: String) {
+        val list = _savedStatic.value.filterNot { it.id == id }
+        _savedStatic.value = list
+        write(KEY_SAVED_STATIC, list)
+    }
+
+    /** Anota qué fondo estático o foto acaba de poner Simón. */
+    @Synchronized
+    fun setCurrentStatic(applied: AppliedWallpaper?) {
+        _currentStatic.value = applied
+        if (applied == null) prefs.edit().remove(KEY_CURRENT_STATIC).apply() else write(KEY_CURRENT_STATIC, applied)
+    }
+
+    /** Suma una foto (ya copiada dentro de la app) a la lista de fotos usadas como fondo. */
+    @Synchronized
+    fun addAppliedPhoto(path: String) {
+        val all = listOf(path) + _appliedPhotos.value.filterNot { it == path }
+        val keep = all.take(MAX_PHOTOS)
+        val current = _currentStatic.value?.photoPath
+        all.drop(MAX_PHOTOS).filterNot { it == current }.forEach { ImageStore.delete(it) }
+        _appliedPhotos.value = keep
+        write(KEY_APPLIED_PHOTOS, keep)
+    }
+
+    /** Quita una foto de la lista y borra su copia (salvo que sea la que está puesta). */
+    @Synchronized
+    fun deleteAppliedPhoto(path: String) {
+        val list = _appliedPhotos.value.filterNot { it == path }
+        _appliedPhotos.value = list
+        write(KEY_APPLIED_PHOTOS, list)
+        if (_currentStatic.value?.photoPath != path) ImageStore.delete(path)
+    }
+
     // ---- Íconos ----
 
     @Synchronized
     fun addIcon(icon: CustomIcon) {
         val list = listOf(icon) + _icons.value.filterNot { it.id == icon.id }
+        _icons.value = list
+        write(KEY_ICONS, list)
+    }
+
+    /** El último ícono personalizado de una app, si existe. */
+    fun iconFor(packageName: String): CustomIcon? = _icons.value.firstOrNull { it.packageName == packageName }
+
+    /**
+     * Guarda el ícono de una app reemplazando el anterior de esa misma app
+     * (una app = un ícono personalizado; el acceso directo se actualiza).
+     */
+    @Synchronized
+    fun saveIcon(icon: CustomIcon) {
+        val list = listOf(icon) + _icons.value.filterNot { it.id == icon.id || it.packageName == icon.packageName }
         _icons.value = list
         write(KEY_ICONS, list)
     }

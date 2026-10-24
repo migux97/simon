@@ -259,7 +259,9 @@ data class WElement(
     val motion: Motion = Motion.NONE,
     val motionSpeed: Float = 1f,
     val action: TapAction = TapAction.NONE,
-    val actionData: String = ""
+    val actionData: String = "",
+    // Capa oculta en el constructor (no se dibuja)
+    val hidden: Boolean = false
 )
 
 @Serializable
@@ -292,7 +294,13 @@ data class DrawingInfo(
     val name: String,
     val width: Int,
     val height: Int,
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    /** Fondo elegido en el editor (para volver a abrirlo igual). Null = transparente. */
+    val bgColor: Int? = null,
+    /** Foto de fondo elegida en el editor, copiada dentro de la app. */
+    val bgImagePath: String? = null,
+    /** True si además se guardó la capa de trazos sola (sin fondo) para seguir editando. */
+    val hasLayer: Boolean = false
 )
 
 @Serializable

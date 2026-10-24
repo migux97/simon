@@ -3,6 +3,7 @@ package com.migux97.simon.ui.screens
 import android.content.Intent
 import android.provider.Settings
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -28,9 +29,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -40,6 +44,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TimePicker
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -57,10 +63,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.migux97.simon.data.ActionType
 import com.migux97.simon.data.Catalog
+import com.migux97.simon.data.ChargingScreenSettings
 import com.migux97.simon.data.EffectStyle
 import com.migux97.simon.data.FontStyle
 import com.migux97.simon.data.ImageStore
 import com.migux97.simon.data.LauncherBgType
+import com.migux97.simon.data.LockScreenSettings
 import com.migux97.simon.data.Lookup
 import com.migux97.simon.data.Repository
 import com.migux97.simon.data.Routine
@@ -71,6 +79,7 @@ import com.migux97.simon.data.RotationKind
 import com.migux97.simon.data.RotationMode
 import com.migux97.simon.data.StudioStore
 import com.migux97.simon.data.TriggerType
+import com.migux97.simon.data.newId
 import com.migux97.simon.launcher.CHARGE_PAGE
 import com.migux97.simon.launcher.LOCK_PAGE
 import com.migux97.simon.tools.ChargingActivity
@@ -81,11 +90,15 @@ import com.migux97.simon.tools.WallpaperRotator
 import com.migux97.simon.ui.Nav
 import com.migux97.simon.ui.components.ChoiceChips
 import com.migux97.simon.ui.components.ColorRow
+import com.migux97.simon.ui.components.ConfirmDialog
+import com.migux97.simon.ui.components.HelpTip
 import com.migux97.simon.ui.components.LabeledSlider
 import com.migux97.simon.ui.components.Panel
 import com.migux97.simon.ui.components.SceneThumb
 import com.migux97.simon.ui.components.ScenePreview
+import com.migux97.simon.ui.components.StartOverButton
 import com.migux97.simon.ui.components.StaticThumb
+import com.migux97.simon.ui.components.UnsavedChangesDialog
 import com.migux97.simon.wallpaper.WallpaperTarget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -110,22 +123,14 @@ fun ToolsHubScreen(nav: Nav) {
     val sounds by StudioStore.soundsFlow.collectAsStateWithLifecycle()
 
     ToolScreen("Más funciones", nav) {
-        Panel {
-            Text("Permisos", style = MaterialTheme.typography.titleMedium)
-            PermissionLine("Servicio de accesibilidad", "Barra lateral, burbuja y para escuchar eventos (cargador, desbloqueo, Wi-Fi) con Simón cerrado.", perms.access) {
-                openSystem(context, Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            }
-            PermissionLine("Acceso a notificaciones", "Sonidos por app o contacto y notificaciones en la pantalla de bloqueo.", perms.listener) {
-                openSystem(context, Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-            }
-            PermissionLine("Mostrar sobre otras apps", "Para abrir solas la pantalla de carga y la de bloqueo.", perms.overlay) {
-                openSystem(context, overlayIntent(context))
-            }
-            Text(
-                "Las rutinas por evento y la pantalla de carga funcionan mientras esté activo el servicio de accesibilidad o el acceso a notificaciones.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
+        PermissionsPanel(
+            listOf(
+                accessPerm(perms, "Barra lateral, burbuja y para escuchar eventos (cargador, desbloqueo, Wi-Fi) con Simón cerrado."),
+                listenerPerm(perms, "Sonidos por app o contacto y notificaciones en la pantalla de bloqueo."),
+                overlayPerm(context, perms, "Para abrir solas la pantalla de carga y la de bloqueo.")
+            ),
+            note = "Las rutinas por evento y la pantalla de carga funcionan mientras esté activo el servicio de accesibilidad o el acceso a notificaciones."
+        )
         val activeRoutines = routines.count { it.enabled }
         ToolCard("Rutinas automáticas", "Cuando pase algo (una hora, el cargador, auriculares, Wi-Fi…), Simón cambia el fondo, el tema, el sonido, el brillo y más.",
             if (activeRoutines > 0) "$activeRoutines activas" else null, listOf(Color(0xFF8B6CFF), Color(0xFF4A2FBD))) { nav.go("routines") }
@@ -213,16 +218,31 @@ private fun routineTemplates(): List<Routine> = listOf(
     )
 )
 
+/**
+ * Rutina de ejemplo elegida en "Ideas": el editor la abre ya cargada para que
+ * la revises antes de guardarla.
+ */
+internal var pendingRoutineTemplate: Routine? = null
+
 @Composable
 fun RoutinesScreen(nav: Nav) {
     val context = LocalContext.current
     val routines by StudioStore.routinesFlow.collectAsStateWithLifecycle()
     ToolScreen("Rutinas automáticas", nav) {
+        HelpTip("Una rutina es «cuando pase esto» → «Simón hace esto». Tocá una rutina para editarla.")
         Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { nav.go("routine/new") }) { Text("Nueva rutina") }
+            Button(onClick = { pendingRoutineTemplate = null; nav.go("routine/new") }) {
+                Icon(Icons.Filled.Add, null)
+                Spacer(Modifier.width(6.dp))
+                Text("Nueva rutina")
+            }
         }
-        if (routines.isEmpty()) {
-            ToolHint("Todavía no tenés rutinas. Empezá con una de estas y cambiala a tu gusto:")
+        if (routines.isEmpty()) Panel {
+            Text("Todavía no tenés rutinas", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Creá una desde cero o elegí una de las ideas de abajo: se abre lista para que la revises y la guardes.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
         routines.forEach { r ->
             Panel(Modifier.clickable { nav.go("routine/${r.id}") }) {
@@ -237,17 +257,21 @@ fun RoutinesScreen(nav: Nav) {
                         RoutineAlarms.scheduleAll(context)
                     })
                 }
-                TextButton(onClick = {
-                    RoutineEngine.run(context, r)
-                    Toast.makeText(context, "Rutina ejecutada", Toast.LENGTH_SHORT).show()
-                }) { Text("Probar ahora") }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = { nav.go("routine/${r.id}") }) { Text("Editar") }
+                    TextButton(enabled = r.actions.isNotEmpty(), onClick = {
+                        RoutineEngine.run(context, r)
+                        Toast.makeText(context, "Rutina ejecutada", Toast.LENGTH_SHORT).show()
+                    }) { Text("Probar ahora") }
+                }
             }
         }
-        ToolTitle("Ideas")
+        ToolTitle("Ideas para empezar")
+        ToolHint("Se abren en el editor: cambiá lo que quieras y tocá «Guardar».")
         routineTemplates().forEach { t ->
             Panel(Modifier.clickable {
-                StudioStore.saveRoutine(t.copy(enabled = false))
-                Toast.makeText(context, "Agregada «${t.name}» (apagada). Revisala y prendela.", Toast.LENGTH_LONG).show()
+                pendingRoutineTemplate = t
+                nav.go("routine/new")
             }) {
                 Text("+ ${t.name}", style = MaterialTheme.typography.titleSmall)
                 Text("${triggerText(t.trigger)} → ${t.actions.joinToString(", ") { it.type.label.lowercase() }}", style = MaterialTheme.typography.bodySmall)
@@ -261,19 +285,50 @@ fun RoutineEditorScreen(nav: Nav, id: String) {
     val context = LocalContext.current
     val perms = rememberToolPerms()
     val existing = remember(id) { StudioStore.routineList.firstOrNull { it.id == id } }
-    var r by remember(id) { mutableStateOf(existing ?: Routine()) }
+    val initial = remember(id) {
+        existing ?: (if (id == "new") pendingRoutineTemplate?.copy(id = newId(), enabled = true) else null) ?: Routine()
+    }
+    var r by remember(id) { mutableStateOf(initial) }
     var addAction by remember { mutableStateOf(false) }
+    var pickTime by remember { mutableStateOf(false) }
+    var askLeave by remember { mutableStateOf(false) }
+    var askDelete by remember { mutableStateOf(false) }
+    // Una rutina nueva con acciones (por ejemplo una idea) todavía no está guardada.
+    val dirty = r != initial || (existing == null && r.actions.isNotEmpty())
 
-    ToolScreen(if (existing == null) "Nueva rutina" else "Editar rutina", nav) {
+    fun save() {
+        StudioStore.saveRoutine(r)
+        RoutineAlarms.scheduleAll(context)
+        pendingRoutineTemplate = null
+    }
+
+    fun leave() {
+        if (dirty) {
+            askLeave = true
+        } else {
+            pendingRoutineTemplate = null
+            nav.back()
+        }
+    }
+
+    BackHandler(enabled = dirty) { askLeave = true }
+
+    ToolScreen(if (existing == null) "Nueva rutina" else "Editar rutina", nav, onBack = { leave() }) {
         Panel {
             OutlinedTextField(r.name, { r = r.copy(name = it) }, label = { Text("Nombre") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         }
         ToolTitle("Cuándo")
+        ToolHint("Elegido: ${r.trigger.type.label}. Deslizá la fila para ver más opciones.")
         ChoiceChips(TriggerType.entries, r.trigger.type, { it.label }, { r = r.copy(trigger = r.trigger.copy(type = it)) })
         if (r.trigger.type == TriggerType.TIME) Panel {
-            Text("%02d:%02d".format(r.trigger.hour, r.trigger.minute), style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Light)
-            LabeledSlider("Hora", r.trigger.hour.toFloat(), 0f..23f, "${r.trigger.hour}") { r = r.copy(trigger = r.trigger.copy(hour = it.roundToInt())) }
-            LabeledSlider("Minutos", r.trigger.minute.toFloat(), 0f..59f, "%02d".format(r.trigger.minute)) { r = r.copy(trigger = r.trigger.copy(minute = it.roundToInt())) }
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable { pickTime = true }.padding(vertical = 4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text("%02d:%02d".format(r.trigger.hour, r.trigger.minute), style = MaterialTheme.typography.displayMedium, fontWeight = FontWeight.Light)
+                Text("Tocá para cambiar la hora", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            }
+            Text("Qué días", style = MaterialTheme.typography.titleSmall)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 dayLetters.forEach { (day, letter) ->
                     val on = day in r.trigger.days
@@ -288,33 +343,47 @@ fun RoutineEditorScreen(nav: Nav, id: String) {
                     ) { Text(letter, color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
             }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { r = r.copy(trigger = r.trigger.copy(days = listOf(1, 2, 3, 4, 5, 6, 7))) }) { Text("Todos los días") }
+                TextButton(onClick = { r = r.copy(trigger = r.trigger.copy(days = listOf(2, 3, 4, 5, 6))) }) { Text("Lunes a viernes") }
+            }
+            if (r.trigger.days.isEmpty()) Text("Elegí al menos un día o no se va a ejecutar nunca.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             Text("Android puede demorarla unos minutos para cuidar la batería.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         ToolTitle("Qué hace")
+        if (r.actions.isEmpty()) ToolHint("Todavía no hace nada. Tocá «Agregar acción» y elegí qué tiene que pasar.")
+        else ToolHint("Se hacen en este orden. Con las flechas las movés y con el ícono de copiar las duplicás.")
         r.actions.forEachIndexed { i, a ->
             Panel {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("${i + 1}. ${a.type.label}", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-                    IconButton(onClick = { r = r.copy(actions = r.actions.filterIndexed { j, _ -> j != i }) }) { Icon(Icons.Filled.Close, "Quitar") }
+                    Text("${i + 1}. ${a.type.label}", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, maxLines = 2)
+                    IconButton(onClick = {
+                        r = r.copy(actions = r.actions.toMutableList().also { it.add(i + 1, a) })
+                    }) { Icon(Icons.Filled.ContentCopy, "Duplicar") }
+                    OrderButtons(i, r.actions.size, { to -> r = r.copy(actions = r.actions.moved(i, to)) }) {
+                        r = r.copy(actions = r.actions.filterIndexed { j, _ -> j != i })
+                    }
                 }
                 ActionEditor(a, perms) { na -> r = r.copy(actions = r.actions.mapIndexed { j, old -> if (j == i) na else old }) }
             }
         }
         Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilledTonalButton(onClick = { addAction = true }) { Text("Agregar acción") }
+            FilledTonalButton(onClick = { addAction = true }) {
+                Icon(Icons.Filled.Add, null)
+                Spacer(Modifier.width(6.dp))
+                Text("Agregar acción")
+            }
         }
-        Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Button(onClick = {
-                StudioStore.saveRoutine(r)
-                RoutineAlarms.scheduleAll(context)
+                save()
                 nav.back()
             }) { Text("Guardar") }
-            OutlinedButton(onClick = { RoutineEngine.run(context, r) }, enabled = r.actions.isNotEmpty()) { Text("Probar") }
-            if (existing != null) TextButton(onClick = {
-                RoutineAlarms.cancel(context, existing)
-                StudioStore.deleteRoutine(existing.id)
-                nav.back()
-            }) { Text("Borrar") }
+            OutlinedButton(onClick = {
+                RoutineEngine.run(context, r, record = false)
+                Toast.makeText(context, "Probando…", Toast.LENGTH_SHORT).show()
+            }, enabled = r.actions.isNotEmpty()) { Text("Probar") }
+            if (existing != null) TextButton(onClick = { askDelete = true }) { Text("Borrar rutina", color = MaterialTheme.colorScheme.error) }
         }
     }
 
@@ -337,6 +406,49 @@ fun RoutineEditorScreen(nav: Nav, id: String) {
         },
         confirmButton = { TextButton(onClick = { addAction = false }) { Text("Cerrar") } }
     )
+    if (pickTime) TimePickDialog(r.trigger.hour, r.trigger.minute, onDismiss = { pickTime = false }) { h, m ->
+        r = r.copy(trigger = r.trigger.copy(hour = h, minute = m))
+        pickTime = false
+    }
+    if (askDelete && existing != null) ConfirmDialog(
+        title = "¿Borrar «${existing.name}»?",
+        message = "La rutina se borra y deja de ejecutarse. No se puede deshacer.",
+        confirm = "Borrar",
+        onDismiss = { askDelete = false },
+        onConfirm = {
+            askDelete = false
+            RoutineAlarms.cancel(context, existing)
+            StudioStore.deleteRoutine(existing.id)
+            nav.back()
+        }
+    )
+    if (askLeave) UnsavedChangesDialog(
+        onSave = {
+            askLeave = false
+            save()
+            nav.back()
+        },
+        onDiscard = {
+            askLeave = false
+            pendingRoutineTemplate = null
+            nav.back()
+        },
+        onDismiss = { askLeave = false }
+    )
+}
+
+/** Reloj de Material para elegir la hora de una rutina. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TimePickDialog(hour: Int, minute: Int, onDismiss: () -> Unit, onPick: (Int, Int) -> Unit) {
+    val state = rememberTimePickerState(initialHour = hour, initialMinute = minute, is24Hour = true)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("¿A qué hora?") },
+        text = { TimePicker(state = state) },
+        confirmButton = { TextButton(onClick = { onPick(state.hour, state.minute) }) { Text("Listo") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } }
+    )
 }
 
 private fun defaultAction(t: ActionType): RoutineAction = when (t) {
@@ -353,9 +465,45 @@ private fun defaultAction(t: ActionType): RoutineAction = when (t) {
 @Composable
 private fun ActionEditor(a: RoutineAction, perms: ToolPerms, onChange: (RoutineAction) -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var pickApp by remember { mutableStateOf(false) }
+    val photo = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) scope.launch {
+            val path = withContext(Dispatchers.IO) { ImageStore.importImage(context, uri, 2400) }
+            if (path != null) onChange(a.copy(value = RoutineEngine.PHOTO_PREFIX + path))
+            else Toast.makeText(context, "No se pudo abrir la foto", Toast.LENGTH_SHORT).show()
+        }
+    }
     when (a.type) {
         ActionType.STATIC_WALLPAPER -> {
+            val drawings by StudioStore.drawingsFlow.collectAsStateWithLifecycle()
+            val own: RotationEntry? = when {
+                a.value.startsWith(RoutineEngine.PHOTO_PREFIX) -> RotationEntry(RotationKind.PHOTO, a.value.removePrefix(RoutineEngine.PHOTO_PREFIX))
+                a.value.startsWith(RoutineEngine.DRAWING_PREFIX) -> RotationEntry(RotationKind.DRAWING, a.value.removePrefix(RoutineEngine.DRAWING_PREFIX))
+                else -> null
+            }
+            if (own != null) Row(verticalAlignment = Alignment.CenterVertically) {
+                RotationThumb(own, Modifier.width(48.dp).height(86.dp).clip(RoundedCornerShape(10.dp)))
+                Spacer(Modifier.width(12.dp))
+                Text(if (own.kind == RotationKind.PHOTO) "Tu foto" else "Tu dibujo", style = MaterialTheme.typography.bodyLarge)
+            }
+            FilledTonalButton(onClick = { photo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
+                Text(if (own?.kind == RotationKind.PHOTO) "Cambiar foto" else "Usar una foto mía")
+            }
+            if (drawings.isNotEmpty()) {
+                Text("Mis dibujos", style = MaterialTheme.typography.labelLarge)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(drawings, key = { it.id }) { d ->
+                        val value = RoutineEngine.DRAWING_PREFIX + d.id
+                        Box(
+                            Modifier.width(48.dp).height(86.dp).clip(RoundedCornerShape(10.dp))
+                                .border(if (a.value == value) 3.dp else 0.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(10.dp))
+                                .clickable { onChange(a.copy(value = value)) }
+                        ) { RotationThumb(RotationEntry(RotationKind.DRAWING, d.id), Modifier.fillMaxSize()) }
+                    }
+                }
+            }
+            Text("Diseños de Simón", style = MaterialTheme.typography.labelLarge)
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(Catalog.staticWallpapers, key = { it.id }) { sw ->
                     Box(
@@ -365,6 +513,7 @@ private fun ActionEditor(a: RoutineAction, perms: ToolPerms, onChange: (RoutineA
                     ) { StaticThumb(sw, Modifier.fillMaxSize()) }
                 }
             }
+            Text("Dónde se pone", style = MaterialTheme.typography.labelLarge)
             ChoiceChips(WallpaperTarget.entries, WallpaperTarget.entries.getOrElse(a.number) { WallpaperTarget.BOTH }, { it.label }, { onChange(a.copy(number = it.ordinal)) })
         }
         ActionType.LIVE_WALLPAPER -> {
@@ -395,7 +544,13 @@ private fun ActionEditor(a: RoutineAction, perms: ToolPerms, onChange: (RoutineA
             }
         }
         ActionType.MEDIA_VOLUME -> LabeledSlider("Volumen", a.number.toFloat(), 0f..100f, "${a.number}%") { onChange(a.copy(number = it.roundToInt())) }
-        ActionType.OPEN_APP -> OutlinedButton(onClick = { pickApp = true }) { Text(if (a.value.isBlank()) "Elegir app" else appName(a.value)) }
+        ActionType.OPEN_APP -> Row(verticalAlignment = Alignment.CenterVertically) {
+            if (a.value.isNotBlank()) {
+                AppIconFor(a.value, 36)
+                Spacer(Modifier.width(10.dp))
+            }
+            OutlinedButton(onClick = { pickApp = true }) { Text(if (a.value.isBlank()) "Elegir app" else "Cambiar: ${appName(a.value)}") }
+        }
         ActionType.EFFECT -> {
             ChoiceChips(EffectStyle.entries, EffectStyle.entries.getOrElse(a.number) { EffectStyle.entries.first() }, { it.label }, { onChange(a.copy(number = it.ordinal)) })
             OutlinedTextField(a.value, { onChange(a.copy(value = it)) }, label = { Text("Texto (opcional)") }, singleLine = true)
@@ -446,7 +601,11 @@ fun RotationScreen(nav: Nav) {
         }
     }
 
-    ToolScreen("Fondos que cambian solos", nav) {
+    ToolScreen("Fondos que cambian solos", nav, actions = {
+        StartOverButton(message = "Se vacía la lista de fondos y se quitan los fondos de día y de noche. El modo queda como está. ¿Seguís?") {
+            set { it.copy(entries = emptyList(), index = 0, day = null, night = null, liveDay = null, liveNight = null, lastApplied = "") }
+        }
+    }) {
         ToolTitle("Modo")
         ChoiceChips(RotationMode.entries, r.mode, { it.label }, { m -> set { it.copy(mode = m, lastApplied = "") } })
         when (r.mode) {
@@ -596,24 +755,31 @@ fun ChargingSettingsScreen(nav: Nav) {
     val context = LocalContext.current
     val perms = rememberToolPerms()
     val s by StudioStore.chargingFlow.collectAsStateWithLifecycle()
-    fun set(t: (com.migux97.simon.data.ChargingScreenSettings) -> com.migux97.simon.data.ChargingScreenSettings) = StudioStore.updateCharging(t)
+    fun set(t: (ChargingScreenSettings) -> ChargingScreenSettings) = StudioStore.updateCharging(t)
 
-    ToolScreen("Pantalla al cargar", nav) {
+    ToolScreen("Pantalla al cargar", nav, actions = {
+        StartOverButton(message = "Vuelve el diseño de la pantalla de carga al original y se quita tu decoración (stickers, widgets…). ¿Seguís?") {
+            set { ChargingScreenSettings(enabled = it.enabled) }
+            StudioStore.setItems(StudioStore.items.filterNot { it.page == CHARGE_PAGE })
+        }
+    }) {
         MainSwitch(
             "Mostrar al enchufar",
             "Como una mesita de luz: reloj grande, batería, próxima alarma y tu decoración. Se cierra sola al desenchufar. El contenido se mueve apenas cada tanto para no marcar la pantalla.",
             s.enabled
         ) { on -> set { it.copy(enabled = on) } }
-        if (!perms.overlay || !(perms.access || perms.listener)) Panel {
-            PermissionLine("Mostrar sobre otras apps", "Android solo deja abrirla sola con este permiso.", perms.overlay) { openSystem(context, overlayIntent(context)) }
-            PermissionLine("Accesibilidad o notificaciones", "Para enterarse de que enchufaste el teléfono con Simón cerrado.", perms.access || perms.listener) {
-                openSystem(context, Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            }
-        }
+        PermissionsPanel(
+            listOf(
+                overlayPerm(context, perms, "Android solo deja abrirla sola con este permiso."),
+                accessPerm(perms, "Para enterarse de que enchufaste el teléfono con Simón cerrado. Alcanza con este o con el de abajo."),
+                listenerPerm(perms, "También sirve para enterarse del cargador. Alcanza con este o con el de arriba.")
+            ),
+            ready = perms.overlay && (perms.access || perms.listener)
+        )
         Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
             OutlinedButton(onClick = {
                 openSystem(context, Intent(context, ChargingActivity::class.java))
-            }) { Text("Ver cómo queda") }
+            }) { Text("Ver en pantalla real") }
         }
         Panel {
             ToggleRow("Solo con el teléfono bloqueado", s.onlyWhenLocked) { v -> set { it.copy(onlyWhenLocked = v) } }
@@ -649,7 +815,7 @@ fun LockSettingsScreen(nav: Nav) {
     val scope = rememberCoroutineScope()
     val perms = rememberToolPerms()
     val s by StudioStore.lockFlow.collectAsStateWithLifecycle()
-    fun set(t: (com.migux97.simon.data.LockScreenSettings) -> com.migux97.simon.data.LockScreenSettings) = StudioStore.updateLock(t)
+    fun set(t: (LockScreenSettings) -> LockScreenSettings) = StudioStore.updateLock(t)
 
     val photo = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) scope.launch {
@@ -664,20 +830,27 @@ fun LockSettingsScreen(nav: Nav) {
         }
     }
 
-    ToolScreen("Pantalla de bloqueo", nav) {
+    ToolScreen("Pantalla de bloqueo", nav, actions = {
+        StartOverButton(message = "Vuelve el diseño de tu pantalla de bloqueo al original y se quita tu decoración (stickers, widgets…). ¿Seguís?") {
+            set { LockScreenSettings(enabled = it.enabled) }
+            StudioStore.setItems(StudioStore.items.filterNot { it.page == LOCK_PAGE })
+        }
+    }) {
         MainSwitch(
             "Usar mi pantalla de bloqueo",
             "Al prender la pantalla aparece tu diseño. Deslizás hacia arriba y sigue el bloqueo de tu teléfono (PIN, huella o cara), así que tu seguridad no cambia.",
             s.enabled
         ) { on -> set { it.copy(enabled = on) } }
-        if (!perms.overlay || !(perms.access || perms.listener)) Panel {
-            PermissionLine("Mostrar sobre otras apps", "Android solo deja abrirla sola con este permiso.", perms.overlay) { openSystem(context, overlayIntent(context)) }
-            PermissionLine("Accesibilidad o notificaciones", "Para saber cuándo se prende la pantalla.", perms.access || perms.listener) {
-                openSystem(context, Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            }
-        }
+        PermissionsPanel(
+            listOf(
+                overlayPerm(context, perms, "Android solo deja abrirla sola con este permiso."),
+                accessPerm(perms, "Para saber cuándo se prende la pantalla. Alcanza con este o con el de abajo."),
+                listenerPerm(perms, "También sirve para saber cuándo se prende la pantalla, y además muestra tus notificaciones. Alcanza con este o con el de arriba.")
+            ),
+            ready = perms.overlay && (perms.access || perms.listener)
+        )
         Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-            OutlinedButton(onClick = { openSystem(context, Intent(context, LockActivity::class.java)) }) { Text("Ver cómo queda") }
+            OutlinedButton(onClick = { openSystem(context, Intent(context, LockActivity::class.java)) }) { Text("Ver en pantalla real") }
         }
         ToolTitle("Fondo")
         BackgroundEditor(

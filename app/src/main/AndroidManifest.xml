@@ -78,6 +78,15 @@
             android:windowSoftInputMode="adjustPan"
             android:configChanges="keyboard|keyboardHidden|navigation|screenSize|smallestScreenSize|screenLayout|orientation|uiMode" />
 
+        <!-- Editor a pantalla completa de la capa, la pantalla de bloqueo y la de carga (con tu fondo real detrás) -->
+        <activity
+            android:name=".launcher.PageEditorActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.Simon.Launcher"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="keyboard|keyboardHidden|navigation|screenSize|smallestScreenSize|screenLayout|orientation|uiMode" />
+
         <!--
             Simón solo aparece como launcher si el usuario activa el modo launcher.
             Mientras tanto este alias está apagado y el teléfono sigue con su launcher original.

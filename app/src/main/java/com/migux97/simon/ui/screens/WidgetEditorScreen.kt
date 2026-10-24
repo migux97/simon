@@ -25,11 +25,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.CalendarMonth
-import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -68,7 +70,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.migux97.simon.data.BgStyle
 import com.migux97.simon.data.Catalog
 import com.migux97.simon.data.Decoration
@@ -84,9 +88,13 @@ import com.migux97.simon.ui.Nav
 import com.migux97.simon.ui.components.BackTopBar
 import com.migux97.simon.ui.components.ChoiceChips
 import com.migux97.simon.ui.components.ColorRow
+import com.migux97.simon.ui.components.ConfirmDialog
+import com.migux97.simon.ui.components.HelpTip
 import com.migux97.simon.ui.components.LabeledSlider
 import com.migux97.simon.ui.components.Panel
 import com.migux97.simon.ui.components.PreviewBackdrop
+import com.migux97.simon.ui.components.StartOverButton
+import com.migux97.simon.ui.components.UnsavedChangesDialog
 import com.migux97.simon.ui.components.WidgetPreview
 import com.migux97.simon.widget.Draw
 import com.migux97.simon.widget.Place
@@ -118,11 +126,34 @@ fun pinDesign(context: android.content.Context, design: WidgetDesign) {
     val ok = WidgetUpdater.requestPin(context, design)
     Toast.makeText(
         context,
-        if (ok) "Confirmá para agregarlo a tu pantalla de inicio"
+        if (ok) "Confirmá en el cartel para agregarlo a tu pantalla de inicio"
         else "Tu launcher no permite agregarlo desde acá: mantené presionada la pantalla de inicio → Widgets → Simón (${design.size.label}).",
         Toast.LENGTH_LONG
     ).show()
 }
+
+/** Nombre para una copia, sin pasarse del largo máximo. */
+internal fun copyName(name: String): String = "$name (copia)".take(40)
+
+/**
+ * Diseño en blanco del mismo tipo y tamaño, con colores neutros (gris oscuro y
+ * texto blanco), sin fotos, textos ni stickers. Mantiene el id y el nombre para
+ * que los widgets que lo usan sigan vinculados.
+ */
+private fun blankDesign(d: WidgetDesign): WidgetDesign = WidgetDesign(
+    id = d.id,
+    name = d.name,
+    kind = d.kind,
+    size = d.size,
+    bgStyle = BgStyle.SOLID,
+    color1 = 0xFF1C1C1E.toInt(),
+    color2 = 0xFF2C2C2E.toInt(),
+    textColor = 0xFFFFFFFF.toInt(),
+    accentColor = 0xFFB0B0B5.toInt(),
+    font = FontStyle.SANS,
+    decoration = Decoration.NONE,
+    use24h = d.use24h
+)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -134,6 +165,7 @@ fun WidgetEditorScreen(nav: Nav, designId: String) {
         Column(Modifier.fillMaxSize()) {
             BackTopBar("Diseño", onBack = { nav.back() })
             Text("Este diseño ya no existe.", modifier = Modifier.padding(24.dp))
+            OutlinedButton(onClick = { nav.tab("widgets") }, modifier = Modifier.padding(horizontal = 24.dp)) { Text("Ver widgets") }
         }
         return
     }
@@ -143,7 +175,14 @@ fun WidgetEditorScreen(nav: Nav, designId: String) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var refresh by remember { mutableIntStateOf(0) }
     var confirmExit by remember { mutableStateOf(false) }
+    var confirmRevert by remember { mutableStateOf(false) }
+    // Si el diseño está en la pantalla de inicio, antes de guardar se pregunta dónde.
+    var saveThen by remember { mutableStateOf<((WidgetDesign) -> Unit)?>(null) }
+    val bindings by Repository.bindings.collectAsStateWithLifecycle()
     val sid = savedId
+    val placedCount = remember(sid, bindings) {
+        if (sid == null) 0 else WidgetUpdater.placedBindings(context).count { it.value == sid }
+    }
     val dirty = if (sid == null) d != original else Repository.design(sid) != d
 
     var photoTarget by remember { mutableStateOf(PhotoTarget.MAIN) }
@@ -166,6 +205,7 @@ fun WidgetEditorScreen(nav: Nav, designId: String) {
         picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
     }
 
+    /** Guarda sobre el mismo diseño: se actualizan todos los widgets que lo usan. */
     fun commit(): WidgetDesign {
         val id = savedId ?: newId()
         val final = d.copy(id = id)
@@ -175,20 +215,34 @@ fun WidgetEditorScreen(nav: Nav, designId: String) {
         return final
     }
 
+    /** Guarda como un diseño nuevo: los widgets que ya están en el inicio no cambian. */
+    fun commitAsCopy(): WidgetDesign {
+        val copy = d.copy(id = newId(), name = copyName(d.name))
+        saveAndRefresh(context, copy)
+        savedId = copy.id
+        d = copy
+        return copy
+    }
+
+    fun requestSave(afterSave: (WidgetDesign) -> Unit) {
+        if (placedCount > 0 && dirty) saveThen = afterSave else afterSave(commit())
+    }
+
     BackHandler(enabled = dirty) { confirmExit = true }
 
     Column(Modifier.fillMaxSize()) {
-        BackTopBar(d.name, onBack = { if (dirty) confirmExit = true else nav.back() }) {
-            IconButton(onClick = {
-                commit()
-                Toast.makeText(context, "Guardado en Mío", Toast.LENGTH_SHORT).show()
-            }) { Icon(Icons.Filled.Check, contentDescription = "Guardar") }
+        BackTopBar(d.name, onBack = { if (dirty) confirmExit = true else nav.back() })
+        if (placedCount > 0) {
+            HelpTip(
+                if (placedCount == 1) "Este diseño está en 1 widget de tu inicio: los cambios se ven ahí."
+                else "Este diseño está en $placedCount widgets de tu inicio: los cambios se ven en todos."
+            )
         }
         // Vista previa
         Box(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp)
+                .padding(horizontal = 16.dp, vertical = 4.dp)
                 .clip(RoundedCornerShape(26.dp))
                 .background(PreviewBackdrop)
                 .padding(vertical = 22.dp, horizontal = if (d.size == WidgetSize.SMALL) 90.dp else 28.dp),
@@ -197,6 +251,13 @@ fun WidgetEditorScreen(nav: Nav, designId: String) {
             key(refresh) {
                 WidgetPreview(d, Modifier.fillMaxWidth(if (d.size == WidgetSize.LARGE) 0.78f else 1f))
             }
+        }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            StartOverButton(
+                message = "El widget queda en blanco, del mismo tipo y tamaño y con colores neutros. No se guarda hasta que toques «Guardar»."
+            ) { d = blankDesign(d) }
+            Spacer(Modifier.weight(1f))
+            if (sid != null) TextButton(onClick = { confirmRevert = true }, enabled = dirty) { Text("Volver a lo guardado") }
         }
         ScrollableTabRow(selectedTabIndex = tab, edgePadding = 12.dp, containerColor = MaterialTheme.colorScheme.background) {
             listOf("Estilo", "Contenido", "Fondo", "Texto", "Stickers", "Detalles").forEachIndexed { i, t ->
@@ -210,12 +271,12 @@ fun WidgetEditorScreen(nav: Nav, designId: String) {
                 .padding(vertical = 8.dp)
         ) {
             when (tab) {
-                0 -> StyleTab(d) { d = it }
+                0 -> StyleTab(d, sizeLocked = placedCount > 0) { d = it }
                 1 -> ContentTab(d, onChange = { d = it }, pickPhoto = ::pickPhoto, onWeather = { refresh++ })
                 2 -> BackgroundTab(d, onChange = { d = it }, pickPhoto = { pickPhoto(PhotoTarget.BACKGROUND) })
                 3 -> TextTab(d) { d = it }
                 4 -> com.migux97.simon.ui.components.StickerAttachEditor(d.stickers) { d = d.copy(stickers = it) }
-                5 -> DetailsTab(d) { d = it }
+                else -> DetailsTab(d) { d = it }
             }
         }
         Surface(tonalElevation = 3.dp) {
@@ -227,21 +288,51 @@ fun WidgetEditorScreen(nav: Nav, designId: String) {
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 OutlinedButton(onClick = {
-                    commit()
-                    Toast.makeText(context, "Guardado en Mío", Toast.LENGTH_SHORT).show()
+                    requestSave { Toast.makeText(context, "Guardado. Lo encontrás en Mío y en Widgets.", Toast.LENGTH_SHORT).show() }
                 }, modifier = Modifier.weight(1f)) { Text("Guardar") }
-                Button(onClick = { pinDesign(context, commit()) }, modifier = Modifier.weight(1.4f)) { Text("Agregar a inicio") }
+                Button(onClick = { requestSave { saved -> pinDesign(context, saved) } }, modifier = Modifier.weight(1.4f)) { Text("Agregar a inicio") }
             }
         }
     }
 
-    if (confirmExit) {
+    saveThen?.let { afterSave ->
         AlertDialog(
-            onDismissRequest = { confirmExit = false },
-            title = { Text("¿Guardar los cambios?") },
-            text = { Text("Hiciste cambios en este diseño.") },
-            confirmButton = { TextButton(onClick = { commit(); confirmExit = false; nav.back() }) { Text("Guardar") } },
-            dismissButton = { TextButton(onClick = { confirmExit = false; nav.back() }) { Text("Descartar") } }
+            onDismissRequest = { saveThen = null },
+            title = { Text("¿Cómo guardás los cambios?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        (if (placedCount == 1) "Este diseño está en 1 widget de tu inicio. " else "Este diseño está en $placedCount widgets de tu inicio. ") +
+                            "Podés cambiarlos todos o guardar una copia aparte y dejarlos como están."
+                    )
+                    Button(onClick = { saveThen = null; afterSave(commit()) }, modifier = Modifier.fillMaxWidth()) { Text("Guardar en todos") }
+                    OutlinedButton(onClick = { saveThen = null; afterSave(commitAsCopy()) }, modifier = Modifier.fillMaxWidth()) { Text("Guardar como copia nueva") }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { saveThen = null }) { Text("Cancelar") } }
+        )
+    }
+
+    if (confirmExit) {
+        UnsavedChangesDialog(
+            onSave = { confirmExit = false; requestSave { nav.back() } },
+            onDiscard = { confirmExit = false; nav.back() },
+            onDismiss = { confirmExit = false }
+        )
+    }
+
+    if (confirmRevert) {
+        ConfirmDialog(
+            title = "¿Volver a lo guardado?",
+            message = "Se descartan los cambios que hiciste desde la última vez que guardaste.",
+            confirm = "Volver a lo guardado",
+            onDismiss = { confirmRevert = false },
+            onConfirm = {
+                confirmRevert = false
+                val id = savedId
+                if (id != null) Repository.design(id)?.let { d = it }
+            }
         )
     }
 }
@@ -250,9 +341,10 @@ fun WidgetEditorScreen(nav: Nav, designId: String) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun StyleTab(d: WidgetDesign, onChange: (WidgetDesign) -> Unit) {
+private fun StyleTab(d: WidgetDesign, sizeLocked: Boolean, onChange: (WidgetDesign) -> Unit) {
     Panel {
         Text("Paletas", style = MaterialTheme.typography.titleMedium)
+        Text("Cambia colores, letra y decoración", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Catalog.palettes.forEach { p ->
                 val selected = d.color1 == p.c1 && d.color2 == p.c2 && d.textColor == p.text
@@ -288,9 +380,18 @@ private fun StyleTab(d: WidgetDesign, onChange: (WidgetDesign) -> Unit) {
     ChoiceChips(WidgetKind.entries, d.kind, { it.label }, { onChange(d.copy(kind = it)) })
     Panel {
         Text("Tamaño", style = MaterialTheme.typography.titleMedium)
-        Text("Pequeño 2×2 · Mediano 4×2 · Grande 4×4", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (sizeLocked) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("${d.size.label} ${d.size.cellsW}×${d.size.cellsH}", style = MaterialTheme.typography.bodyLarge)
+            }
+            Text("Para cambiar el tamaño, agregá un widget nuevo", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            Text("Pequeño 2×2 · Mediano 4×2 · Grande 4×4", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
-    ChoiceChips(WidgetSize.entries, d.size, { it.label }, { onChange(d.copy(size = it)) })
+    if (!sizeLocked) ChoiceChips(WidgetSize.entries, d.size, { it.label }, { onChange(d.copy(size = it)) })
     Spacer(Modifier.height(12.dp))
 }
 
@@ -301,8 +402,8 @@ private fun BackgroundTab(d: WidgetDesign, onChange: (WidgetDesign) -> Unit, pic
         if (it == BgStyle.PHOTO && d.photoPath == null && d.kind != WidgetKind.PHOTO) pickPhoto() else onChange(d.copy(bgStyle = it))
     })
     Panel {
-        ColorRow(if (d.bgStyle == BgStyle.SOLID) "Color" else "Color 1", d.color1) { onChange(d.copy(color1 = it)) }
-        if (d.bgStyle != BgStyle.SOLID) ColorRow("Color 2", d.color2) { onChange(d.copy(color2 = it)) }
+        ColorRow("Color de fondo", d.color1) { onChange(d.copy(color1 = it)) }
+        if (d.bgStyle != BgStyle.SOLID) ColorRow("Segundo color de fondo", d.color2) { onChange(d.copy(color2 = it)) }
         if (d.bgStyle == BgStyle.GRADIENT || d.bgStyle == BgStyle.GLASS) {
             LabeledSlider("Dirección", d.gradientAngle.toFloat(), 0f..360f, "${d.gradientAngle}°") { onChange(d.copy(gradientAngle = it.roundToInt())) }
         }
@@ -348,8 +449,8 @@ private fun TextTab(d: WidgetDesign, onChange: (WidgetDesign) -> Unit) {
         }
     }
     Panel {
-        ColorRow("Color del texto", d.textColor) { onChange(d.copy(textColor = it)) }
-        ColorRow("Color de acento", d.accentColor) { onChange(d.copy(accentColor = it)) }
+        ColorRow("Color principal (texto)", d.textColor) { onChange(d.copy(textColor = it)) }
+        ColorRow("Color de detalles", d.accentColor) { onChange(d.copy(accentColor = it)) }
     }
 }
 
@@ -358,12 +459,6 @@ private fun DetailsTab(d: WidgetDesign, onChange: (WidgetDesign) -> Unit) {
     Panel {
         OutlinedTextField(d.name, { onChange(d.copy(name = it.take(40))) }, label = { Text("Nombre del diseño") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         LabeledSlider("Esquinas redondeadas", d.cornerRadius.toFloat(), 0f..50f, "${d.cornerRadius}") { onChange(d.copy(cornerRadius = it.roundToInt())) }
-        if (d.kind == WidgetKind.DIGITAL_CLOCK || d.kind == WidgetKind.ANALOG_CLOCK) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Formato 24 horas", modifier = Modifier.weight(1f))
-                Switch(d.use24h, { onChange(d.copy(use24h = it)) })
-            }
-        }
     }
     Panel {
         Text("Tocá el widget en tu pantalla de inicio para volver a este editor. Los cambios que guardes se aplican al instante en todos los widgets que usan este diseño.",
@@ -417,7 +512,11 @@ private fun ContentTab(d: WidgetDesign, onChange: (WidgetDesign) -> Unit, pickPh
             OutlinedTextField(d.text, { onChange(d.copy(text = it.take(40))) }, label = { Text("¿Para qué falta?") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             DateButton("Fecha", if (d.dateMillis == 0L) "Elegir fecha" else dateFmt.format(Date(d.dateMillis))) { dateOpen = true }
         }
-        WidgetKind.WEATHER -> CitySearch(d, onChange, onWeather)
+        WidgetKind.WEATHER -> CitySearchPanel(
+            currentCity = d.city,
+            onPicked = { place -> onChange(d.copy(city = place.name, lat = place.lat, lon = place.lon)) },
+            onWeatherReady = onWeather
+        )
     }
     Spacer(Modifier.height(12.dp))
 
@@ -478,27 +577,41 @@ private fun DateButton(label: String, value: String, onClick: () -> Unit) {
     }
 }
 
+/**
+ * Buscador de ciudad para el clima (se usa en el editor de widgets y en el
+ * constructor). Al elegir una ciudad descarga el clima y avisa con [onWeatherReady].
+ */
 @Composable
-private fun CitySearch(d: WidgetDesign, onChange: (WidgetDesign) -> Unit, onWeather: () -> Unit) {
+internal fun CitySearchPanel(
+    currentCity: String,
+    onPicked: (Place) -> Unit,
+    title: String = "Elegí tu ciudad",
+    onWeatherReady: () -> Unit = {}
+) {
     val scope = rememberCoroutineScope()
     var query by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<List<Place>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var searched by remember { mutableStateOf(false) }
     fun search() {
+        if (query.isBlank() || loading) return
         loading = true
+        searched = false
+        val q = query
         scope.launch {
-            results = WeatherService.searchCity(query)
+            results = try { WeatherService.searchCity(q) } catch (e: Exception) { emptyList() }
             loading = false
             searched = true
         }
     }
     Panel {
-        Text(if (d.city.isBlank()) "Elegí tu ciudad" else "Ciudad: ${d.city}", style = MaterialTheme.typography.titleMedium)
+        Text(if (currentCity.isBlank()) title else "Ciudad: $currentCity", style = MaterialTheme.typography.titleMedium)
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
-                query, { query = it },
-                label = { Text("Buscar ciudad") }, singleLine = true,
+                query, { query = it; searched = false },
+                label = { Text(if (currentCity.isBlank()) "Buscar ciudad" else "Buscar otra ciudad") }, singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { search() }),
                 modifier = Modifier.weight(1f)
             )
             IconButton(onClick = { search() }, enabled = query.isNotBlank() && !loading) {
@@ -506,8 +619,9 @@ private fun CitySearch(d: WidgetDesign, onChange: (WidgetDesign) -> Unit, onWeat
                 else Icon(Icons.Filled.Search, contentDescription = "Buscar")
             }
         }
+        if (loading) Text("Buscando…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (searched && results.isEmpty() && !loading) {
-            Text("No encontré esa ciudad. Revisá la conexión o probá otro nombre.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("No encontramos esa ciudad. Revisá la conexión o probá con otro nombre.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         results.forEachIndexed { i, place ->
             if (i > 0) HorizontalDivider()
@@ -515,12 +629,13 @@ private fun CitySearch(d: WidgetDesign, onChange: (WidgetDesign) -> Unit, onWeat
                 headlineContent = { Text(place.name) },
                 supportingContent = { Text(place.label) },
                 modifier = Modifier.clickable {
-                    onChange(d.copy(city = place.name, lat = place.lat, lon = place.lon))
+                    onPicked(place)
                     results = emptyList()
                     query = ""
+                    searched = false
                     scope.launch {
                         WeatherService.fetch(place.lat, place.lon)?.let { Repository.putWeather(place.lat, place.lon, it) }
-                        onWeather()
+                        onWeatherReady()
                     }
                 }
             )

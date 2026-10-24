@@ -12,7 +12,8 @@ object Lookup {
             ?: Catalog.liveWallpapers.firstOrNull { it.id == id }
 
     fun static(id: String): StaticWallpaper? =
-        Catalog.staticWallpapers.firstOrNull { it.id == id }
+        Repository.staticById(id)
+            ?: Catalog.staticWallpapers.firstOrNull { it.id == id }
             ?: Catalog.themes.map { it.wallpaper }.firstOrNull { it.id == id }
 
     fun theme(id: String): ThemePack? = Catalog.themes.firstOrNull { it.id == id }

@@ -147,6 +147,7 @@ object ElementPainter {
      * estáticos se usa 0. Los videos se dibujan con su primer cuadro.
      */
     fun draw(context: Context?, c: Canvas, e: WElement, r: RectF, env: RenderEnv, widget: CustomWidget?, timeMs: Long, scenes: MutableMap<String, Scene>? = null) {
+        if (e.hidden) return
         when (e.type) {
             ElementType.TEXT -> {
                 val text = Tokens.resolve(e.text.ifBlank { " " }, env, widget)
@@ -315,7 +316,7 @@ object CustomWidgetRenderer {
     fun draw(context: Context?, c: Canvas, w: CustomWidget, width: Float, height: Float, env: RenderEnv, timeMs: Long = 0L) {
         c.save()
         drawBackground(c, w, width, height)
-        w.elements.forEach { e ->
+        w.elements.filterNot { it.hidden }.forEach { e ->
             val r = RectF(e.x * width, e.y * height, (e.x + e.w) * width, (e.y + e.h) * height)
             val m = MotionMath.at(e.motion, e.motionSpeed, timeMs, r.width(), r.height())
             c.save()

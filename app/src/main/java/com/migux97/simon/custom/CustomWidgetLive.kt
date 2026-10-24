@@ -62,7 +62,7 @@ fun CustomWidgetLive(
     onOpenDrawer: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    val animated = widget.elements.any { needsFrames(it) }
+    val animated = widget.elements.any { !it.hidden && needsFrames(it) }
     var timeMs by remember { mutableLongStateOf(0L) }
     var env by remember { mutableStateOf(RenderEnv.current(context)) }
     val start = remember { System.currentTimeMillis() }
@@ -95,7 +95,7 @@ fun CustomWidgetLive(
                 c.nativeCanvas.restore()
             }
         }
-        widget.elements.forEach { e ->
+        widget.elements.filterNot { it.hidden }.forEach { e ->
             val ex = maxWidth * e.x
             val ey = maxHeight * e.y
             val ew = maxWidth * e.w

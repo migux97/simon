@@ -38,6 +38,7 @@ object MediaLibrary {
 
     fun deleteDrawing(id: String) {
         drawingFile(id).delete()
+        File(drawingFile(id).parentFile, "$id.layer.png").delete()
         StudioStore.deleteDrawing(id)
     }
 

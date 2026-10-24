@@ -53,7 +53,10 @@ import com.migux97.simon.data.MediaLibrary
 import com.migux97.simon.data.StudioStore
 import com.migux97.simon.launcher.AnimatedFrames
 import com.migux97.simon.ui.Nav
+import com.migux97.simon.data.StickerInfo
+import com.migux97.simon.ui.components.PreviewBackdrop
 import com.migux97.simon.ui.components.SectionHeader
+import com.migux97.simon.ui.components.StickerEditDialog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -67,6 +70,8 @@ fun CreateScreen(nav: Nav) {
     var pending by remember { mutableStateOf<Delete?>(null) }
     val stickers by StudioStore.stickersFlow.collectAsStateWithLifecycle()
     var pickSticker by remember { mutableStateOf(false) }
+    var editSticker by remember { mutableStateOf<StickerInfo?>(null) }
+    val starters = remember { listOf(1, 2, 3).map { "new$it" to builderStarter(it) } }
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
         item {
@@ -85,39 +90,45 @@ fun CreateScreen(nav: Nav) {
         item { SectionHeader("Empezá desde un modelo") }
         item {
             LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                items(listOf("new1" to "Saludo con hora", "new2" to "Corazones", "new3" to "Progreso del año")) { (id, name) ->
-                    Column(Modifier.width(150.dp).clickable { nav.go("builder/$id") }) {
+                items(starters, key = { it.first }) { (id, starter) ->
+                    Column(Modifier.width(170.dp).clickable { nav.go("builder/$id") }) {
                         Box(
-                            Modifier.fillMaxWidth().height(90.dp).clip(RoundedCornerShape(18.dp))
-                                .background(Brush.linearGradient(listOf(Color(0xFF2A1B5C), Color(0xFF6C4CF5)))),
+                            Modifier.fillMaxWidth().height(100.dp).clip(RoundedCornerShape(18.dp))
+                                .background(PreviewBackdrop).padding(10.dp),
                             contentAlignment = Alignment.Center
-                        ) { Icon(Icons.Filled.Add, null, tint = Color.White) }
-                        Text(name, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 6.dp))
+                        ) {
+                            Box(Modifier.aspectRatio(starter.aspect.coerceIn(0.4f, 4f))) {
+                                CustomWidgetLive(starter, Modifier.fillMaxSize(), interactive = false)
+                            }
+                        }
+                        Text(starter.name, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 6.dp))
                     }
                 }
             }
         }
-        item { SectionHeader("Mis stickers", "Nuevo", onAction = { pickSticker = true }) }
+        item { SectionHeader("Mis stickers", "Nuevo sticker", onAction = { pickSticker = true }) }
         if (stickers.isEmpty()) item { Hint("Creá stickers desde fotos, dibujos, animaciones o formas con tus colores, y pegalos en íconos, widgets y el launcher.") }
+        else item { Hint("Tocá un sticker para cambiarle el nombre o los colores.") }
         item {
             LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(stickers, key = { "s" + it.id }) { st ->
                     Box(
                         Modifier.size(72.dp).clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                            .clickable { pending = Delete("s", st.id, st.name) }
+                            .clickable { editSticker = st }
                             .padding(8.dp)
                     ) { com.migux97.simon.ui.components.StickerThumb(st, Modifier.fillMaxSize()) }
                 }
             }
         }
-        item { SectionHeader("Mis widgets") }
-        if (widgets.isEmpty()) item { Hint("Todavía no creaste widgets.") }
+        item { SectionHeader("Widgets creados por vos", "Nuevo widget", onAction = { nav.go("builder/new") }) }
+        if (widgets.isEmpty()) item { Hint("Todavía no creaste widgets. Empezá con «Widget» o desde un modelo.") }
+        else item { Hint("Tocá uno para editarlo.") }
         items(widgets, key = { "w" + it.id }) { w ->
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     Modifier.height(80.dp).aspectRatio(w.aspect.coerceIn(0.5f, 3.5f)).clickable { nav.go("builder/${w.id}") }
                 ) { CustomWidgetLive(w, Modifier.fillMaxSize(), interactive = false) }
-                Text(w.name, Modifier.weight(1f).padding(horizontal = 12.dp), style = MaterialTheme.typography.titleSmall)
+                Text(w.name, Modifier.weight(1f).clickable { nav.go("builder/${w.id}") }.padding(horizontal = 12.dp), style = MaterialTheme.typography.titleSmall)
                 IconButton(onClick = { pending = Delete("w", w.id, w.name) }) { Icon(Icons.Filled.Delete, "Borrar") }
             }
         }
@@ -162,6 +173,7 @@ fun CreateScreen(nav: Nav) {
 
     val context = LocalContext.current
     if (pickSticker) com.migux97.simon.ui.components.StickerPickerDialog(onDismiss = { pickSticker = false }) { pickSticker = false }
+    editSticker?.let { st -> StickerEditDialog(st, onDismiss = { editSticker = null }) }
     pending?.let { p ->
         AlertDialog(
             onDismissRequest = { pending = null },

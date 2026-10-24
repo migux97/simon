@@ -145,18 +145,84 @@ object IconChanger {
     fun canPin(context: Context): Boolean =
         context.getSystemService(ShortcutManager::class.java)?.isRequestPinShortcutSupported == true
 
-    /** Pide al launcher que agregue un acceso directo con el ícono nuevo. */
-    fun pinShortcut(context: Context, packageName: String, label: String, icon: Bitmap): Boolean {
-        val sm = context.getSystemService(ShortcutManager::class.java) ?: return false
-        if (!sm.isRequestPinShortcutSupported) return false
-        val launch = context.packageManager.getLaunchIntentForPackage(packageName) ?: return false
+    /** Resultado de guardar un ícono en la pantalla de inicio. */
+    enum class PublishResult {
+        /** Ya estaba en la pantalla: se actualizó el dibujo y el nombre. */
+        UPDATED,
+        /** Se le pidió al launcher que lo agregue (el usuario confirma). */
+        REQUESTED,
+        /** El launcher no permite accesos directos o la app no se puede abrir. */
+        FAILED
+    }
+
+    /** Id fijo del acceso directo de una app: así se puede actualizar en vez de duplicar. */
+    fun shortcutId(packageName: String): String = "icon_$packageName"
+
+    /** ¿Este id de acceso directo es de esta app? (el fijo o una copia "icon_<app>_xxxxxxxx"). */
+    private fun belongsTo(id: String, packageName: String): Boolean {
+        val base = shortcutId(packageName)
+        if (id == base) return true
+        if (!id.startsWith(base + "_")) return false
+        val rest = id.substring(base.length + 1)
+        return rest.length == 8 && rest.all { it in '0'..'9' || it in 'a'..'f' }
+    }
+
+    private fun launchIntent(context: Context, packageName: String): Intent? {
+        val launch = context.packageManager.getLaunchIntentForPackage(packageName) ?: return null
         launch.action = Intent.ACTION_MAIN
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
-        val info = ShortcutInfo.Builder(context, "icon_${packageName}_${newId().take(8)}")
-            .setShortLabel(label.ifBlank { packageName }.take(24))
+        return launch
+    }
+
+    private fun buildInfo(context: Context, id: String, label: String, fallback: String, icon: Bitmap, launch: Intent): ShortcutInfo =
+        ShortcutInfo.Builder(context, id)
+            .setShortLabel(label.ifBlank { fallback }.take(24))
             .setIcon(Icon.createWithBitmap(icon))
             .setIntent(launch)
             .build()
+
+    /** ¿Ya hay en la pantalla de inicio un acceso directo de Simón para esta app? */
+    fun isOnHomeScreen(context: Context, packageName: String): Boolean = try {
+        context.getSystemService(ShortcutManager::class.java)?.pinnedShortcuts?.any { belongsTo(it.id, packageName) } == true
+    } catch (e: Exception) {
+        false
+    }
+
+    /**
+     * Guarda el ícono de una app: si ya está en la pantalla de inicio lo
+     * actualiza (todas sus copias); si no, pide agregarlo con un id fijo.
+     */
+    fun publishIcon(context: Context, packageName: String, label: String, icon: Bitmap): PublishResult {
+        val sm = context.getSystemService(ShortcutManager::class.java) ?: return PublishResult.FAILED
+        val launch = launchIntent(context, packageName) ?: return PublishResult.FAILED
+        val pinnedIds = try {
+            sm.pinnedShortcuts.map { it.id }.filter { belongsTo(it, packageName) }
+        } catch (e: Exception) {
+            emptyList()
+        }
+        if (pinnedIds.isNotEmpty()) {
+            val updated = try {
+                sm.updateShortcuts(pinnedIds.map { buildInfo(context, it, label, packageName, icon, launch) })
+            } catch (e: Exception) {
+                false
+            }
+            if (updated) return PublishResult.UPDATED
+        }
+        if (!sm.isRequestPinShortcutSupported) return PublishResult.FAILED
+        return try {
+            if (sm.requestPinShortcut(buildInfo(context, shortcutId(packageName), label, packageName, icon, launch), null)) PublishResult.REQUESTED
+            else PublishResult.FAILED
+        } catch (e: Exception) {
+            PublishResult.FAILED
+        }
+    }
+
+    /** Pide al launcher que agregue otra copia del acceso directo con el ícono nuevo. */
+    fun pinShortcut(context: Context, packageName: String, label: String, icon: Bitmap): Boolean {
+        val sm = context.getSystemService(ShortcutManager::class.java) ?: return false
+        if (!sm.isRequestPinShortcutSupported) return false
+        val launch = launchIntent(context, packageName) ?: return false
+        val info = buildInfo(context, "${shortcutId(packageName)}_${newId().take(8)}", label, packageName, icon, launch)
         return try {
             sm.requestPinShortcut(info, null)
         } catch (e: Exception) {

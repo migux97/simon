@@ -259,6 +259,12 @@ object WidgetUpdater {
 
     // ---- Fijar un widget en la pantalla de inicio desde la app ----
 
+    /** Ids de widgets de Simón que de verdad están en la pantalla de inicio, con lo que muestra cada uno. */
+    fun placedBindings(context: Context): Map<Int, String> {
+        val live = try { allIds(context).toSet() } catch (e: Exception) { emptySet<Int>() }
+        return Repository.bindings.value.filterKeys { it in live }
+    }
+
     fun canPin(context: Context): Boolean =
         AppWidgetManager.getInstance(context).isRequestPinAppWidgetSupported
 
@@ -287,6 +293,7 @@ class WidgetPinReceiver : BroadcastReceiver() {
         WidgetUpdater.update(context, AppWidgetManager.getInstance(context), id)
         WidgetUpdater.scheduleTick(context)
         if (designId.startsWith(WidgetUpdater.CUSTOM_PREFIX) || Repository.design(designId)?.kind == WidgetKind.WEATHER) RefreshWorker.runNow(context)
+        android.widget.Toast.makeText(context, "¡Listo! Ya está en tu inicio", android.widget.Toast.LENGTH_LONG).show()
     }
 }
 

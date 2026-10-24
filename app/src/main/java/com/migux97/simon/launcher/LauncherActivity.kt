@@ -5,6 +5,7 @@ import android.app.WallpaperManager
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProviderInfo
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
@@ -35,6 +36,9 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import com.migux97.simon.ui.components.LocalAnimationsActive
@@ -67,9 +71,12 @@ import com.migux97.simon.data.ItemType
 import com.migux97.simon.data.PageTransition
 import com.migux97.simon.data.Repository
 import com.migux97.simon.data.StudioStore
+import com.migux97.simon.ui.components.UndoStack
 import com.migux97.simon.ui.theme.SimonTheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
 
 /** Estado de la interfaz del launcher compartido entre sus partes. */
@@ -84,11 +91,46 @@ class LauncherUi {
     var appMenu by mutableStateOf<LaunchApp?>(null)
     var appMenuItem by mutableStateOf<HomeItem?>(null)
     var iconEditor by mutableStateOf<LaunchApp?>(null)
+    var dockEditor by mutableStateOf(false)
     var currentPage by mutableIntStateOf(0)
 
+    /** Historial para «Deshacer»: copias de la lista de elementos antes de cada cambio. */
+    val undo = UndoStack<List<HomeItem>>()
+
+    /** Qué elementos toca «Deshacer» (por defecto, solo las páginas del launcher). */
+    var undoScope: (HomeItem) -> Boolean = { it.page >= 0 }
+
+    /** Widgets del sistema quitados: se liberan al salir de la edición, por si se deshace. */
+    private val removedWidgets = mutableListOf<Int>()
+
+    /** Guarda cómo está todo antes de un cambio, para poder deshacerlo. */
+    fun snapshot() = undo.push(StudioStore.items)
+
+    fun undoLast() {
+        val prev = undo.pop() ?: return
+        val scope = undoScope
+        StudioStore.setItems(StudioStore.items.filterNot(scope) + prev.filter(scope))
+    }
+
+    /** Quita un elemento (se puede deshacer). */
+    fun remove(item: HomeItem) {
+        snapshot()
+        if (item.type == ItemType.SYSTEM_WIDGET) removedWidgets += item.appWidgetId
+        StudioStore.removeItem(item.id)
+        if (selectedId == item.id) selectedId = null
+    }
+
+    /** Libera los widgets del sistema quitados que no volvieron con «Deshacer». */
+    fun flushRemovedWidgets(context: Context) {
+        if (removedWidgets.isEmpty()) return
+        val inUse = StudioStore.items.map { it.appWidgetId }.toSet()
+        removedWidgets.filter { it !in inUse }.forEach { WidgetHost.delete(context, it) }
+        removedWidgets.clear()
+    }
+
     fun closeAll(): Boolean {
-        val anything = drawerOpen || openFolder != null || addSheet || editItem != null || appMenu != null || iconEditor != null || editMode
-        drawerOpen = false; openFolder = null; addSheet = false; editItem = null; appMenu = null; iconEditor = null
+        val anything = drawerOpen || openFolder != null || addSheet || editItem != null || appMenu != null || iconEditor != null || dockEditor || editMode
+        drawerOpen = false; openFolder = null; addSheet = false; editItem = null; appMenu = null; iconEditor = null; dockEditor = false
         editMode = false; selectedId = null
         return anything
     }
@@ -97,6 +139,7 @@ class LauncherUi {
 class LauncherActivity : ComponentActivity() {
 
     private val homePressed = MutableStateFlow(0)
+    private val editRequest = MutableStateFlow(0)
     private var pendingWidgetId = -1
     private var pendingPage = 0
 
@@ -112,7 +155,8 @@ class LauncherActivity : ComponentActivity() {
         Repository.init(this)
         AppCatalog.ensureLoaded(this)
         enableEdgeToEdge()
-        setContent { SimonTheme { LauncherRoot(homePressed, onPickSystemWidget = ::pickSystemWidget) } }
+        if (intent?.getBooleanExtra(EXTRA_EDIT, false) == true) editRequest.value = 1
+        setContent { SimonTheme { LauncherRoot(homePressed, onPickSystemWidget = ::pickSystemWidget, editRequest = editRequest) } }
     }
 
     override fun onStart() {
@@ -127,7 +171,8 @@ class LauncherActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        if (intent.action == Intent.ACTION_MAIN && intent.hasCategory(Intent.CATEGORY_HOME)) homePressed.value += 1
+        if (intent.getBooleanExtra(EXTRA_EDIT, false)) editRequest.value += 1
+        else if (intent.action == Intent.ACTION_MAIN && intent.hasCategory(Intent.CATEGORY_HOME)) homePressed.value += 1
     }
 
     // ---- Widgets de otras apps ----
@@ -177,17 +222,28 @@ class LauncherActivity : ComponentActivity() {
         val s = StudioStore.launcherSettings
         val (x, y) = LauncherLayout.freeSpot(pendingPage, w, h, s)
         StudioStore.upsertItem(HomeItem(type = ItemType.SYSTEM_WIDGET, page = pendingPage, x = x, y = y, w = w, h = h, appWidgetId = id, z = StudioStore.maxZ(pendingPage) + 1))
-        Toast.makeText(this, "Widget agregado. Mantené presionado para moverlo.", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Widget agregado. Arrastralo para moverlo.", Toast.LENGTH_SHORT).show()
     }
 
     companion object {
+        /** Extra booleano: abrir el launcher directamente en modo edición. */
+        const val EXTRA_EDIT = "edit"
+
         fun component(context: android.content.Context) = ComponentName(context, LauncherActivity::class.java)
+
+        /** Abre el launcher listo para mover y editar cosas. */
+        fun editIntent(context: android.content.Context): Intent =
+            Intent(context, LauncherActivity::class.java).putExtra(EXTRA_EDIT, true).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun LauncherRoot(homePressed: MutableStateFlow<Int>, onPickSystemWidget: (AppWidgetProviderInfo, Int) -> Unit) {
+fun LauncherRoot(
+    homePressed: MutableStateFlow<Int>,
+    onPickSystemWidget: (AppWidgetProviderInfo, Int) -> Unit,
+    editRequest: MutableStateFlow<Int> = MutableStateFlow(0)
+) {
     val context = LocalContext.current
     val view = LocalView.current
     val scope = rememberCoroutineScope()
@@ -198,9 +254,32 @@ fun LauncherRoot(homePressed: MutableStateFlow<Int>, onPickSystemWidget: (AppWid
     val pages = settings.pages.coerceIn(1, 12)
     val pager = rememberPagerState { pages }
 
-    // Primera vez: armar pantalla por defecto cuando ya cargaron las apps.
-    LaunchedEffect(apps.isNotEmpty(), settings.initialized) {
-        if (apps.isNotEmpty() && !settings.initialized) LauncherLayout.createDefault(context)
+    // Primera vez: preguntar cómo arrancar (con tus apps o en blanco) cuando ya cargaron las apps.
+    var seeding by remember { mutableStateOf(false) }
+    fun seed(withApps: Boolean) {
+        if (seeding) return
+        seeding = true
+        scope.launch {
+            withContext(Dispatchers.IO) { LauncherLayout.createDefault(context, withApps) }
+            seeding = false
+        }
+    }
+
+    // Pedido de "abrir en modo edición" (desde los ajustes de Simón).
+    LaunchedEffect(Unit) {
+        editRequest.collect { v ->
+            if (v > 0) {
+                ui.closeAll()
+                ui.editMode = true
+                editRequest.value = 0
+            }
+        }
+    }
+
+    // Al entrar o salir de la edición: el historial de deshacer arranca de nuevo.
+    LaunchedEffect(ui.editMode) {
+        ui.flushRemovedWidgets(context)
+        ui.undo.clear()
     }
 
     // Barra de estado y de navegación ocultables
@@ -330,7 +409,7 @@ fun LauncherRoot(homePressed: MutableStateFlow<Int>, onPickSystemWidget: (AppWid
             if (settings.dockEnabled) Dock(settings, ui)
         }
 
-        if (ui.editMode) EditBar(ui, settings, pager, onAddPage = {
+        if (ui.editMode) EditBar(ui, settings, items, pager, onAddPage = {
             StudioStore.updateLauncher { it.copy(pages = (it.pages + 1).coerceAtMost(12)) }
             scope.launch { pager.animateScrollToPage(pages) }
         })
@@ -347,6 +426,23 @@ fun LauncherRoot(homePressed: MutableStateFlow<Int>, onPickSystemWidget: (AppWid
     ui.editItem?.let { ItemEditorSheet(it, settings, ui) }
     ui.appMenu?.let { AppMenuSheet(it, ui.appMenuItem, settings, ui, pager.currentPage) }
     ui.iconEditor?.let { IconOverrideSheet(it, settings, ui) }
+    if (ui.dockEditor) DockEditorSheet(settings, ui)
+
+    if (apps.isNotEmpty() && !settings.initialized) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("¿Cómo querés arrancar?") },
+            text = {
+                Text(
+                    "Podés empezar con tus apps de siempre ya acomodadas (después movés todo como quieras) " +
+                        "o con las páginas vacías para armarlas a tu gusto. En los dos casos el dock trae " +
+                        "teléfono, mensajes, cámara y navegador."
+                )
+            },
+            confirmButton = { TextButton(onClick = { seed(true) }, enabled = !seeding) { Text("Con mis apps de siempre") } },
+            dismissButton = { TextButton(onClick = { seed(false) }, enabled = !seeding) { Text("Empezar de cero") } }
+        )
+    }
 }
 
 /** Efecto de transición entre páginas. */
