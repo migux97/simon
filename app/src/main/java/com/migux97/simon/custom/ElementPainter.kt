@@ -207,7 +207,7 @@ object ElementPainter {
                 }
             }
             ElementType.IMAGE, ElementType.DRAWING, ElementType.VIDEO, ElementType.ANIMATION -> {
-                val bmp: Bitmap? = when (e.type) {
+                val raw: Bitmap? = when (e.type) {
                     ElementType.IMAGE -> ImageStore.load(e.mediaPath, 900)
                     ElementType.DRAWING -> MediaLibrary.loadDrawing(e.mediaId, 900)
                     ElementType.VIDEO -> MediaLibrary.videoThumb(e.mediaPath)
@@ -216,6 +216,8 @@ object ElementPainter {
                         frames.getOrNull(MediaLibrary.frameIndex(StudioStore.animation(e.mediaId), frames.size, timeMs))
                     }
                 }
+                // Recorte y ajustes (las animaciones cambian de cuadro todo el tiempo: se dejan como están).
+                val bmp = if (raw != null && e.type != ElementType.ANIMATION) PhotoFx.process(raw, e.photo, e.mediaPath ?: e.mediaId ?: e.id) else raw
                 if (bmp != null) {
                     c.save()
                     c.clipPath(shapePath(e.shape, r, e.corner))
@@ -322,7 +324,7 @@ object CustomWidgetRenderer {
             c.save()
             c.translate(m.dx, m.dy)
             c.rotate(e.rotation + m.rotation, r.centerX(), r.centerY())
-            c.scale(m.scaleX, m.scaleY, r.centerX(), r.centerY())
+            c.scale(m.scaleX * (if (e.flipX) -1f else 1f), m.scaleY * (if (e.flipY) -1f else 1f), r.centerX(), r.centerY())
             val alpha = (255 * e.alpha * m.alpha).toInt().coerceIn(0, 255)
             if (alpha < 255) c.saveLayerAlpha(r.left - r.width(), r.top - r.height(), r.right + r.width(), r.bottom + r.height(), alpha)
             ElementPainter.draw(context, c, e, r, env, w, timeMs)

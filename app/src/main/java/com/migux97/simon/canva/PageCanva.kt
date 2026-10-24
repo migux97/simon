@@ -89,6 +89,7 @@ import com.migux97.simon.launcher.LauncherUi
 import com.migux97.simon.launcher.OVERLAY_PAGE
 import com.migux97.simon.launcher.SystemWidgetList
 import com.migux97.simon.launcher.WidgetHost
+import com.migux97.simon.launcher.flip
 import com.migux97.simon.ui.components.ChoiceChips
 import com.migux97.simon.ui.components.ColorRow
 import com.migux97.simon.ui.components.ConfirmDialog
@@ -98,6 +99,9 @@ import com.migux97.simon.ui.components.WidgetPreview
 import com.migux97.simon.ui.screens.ElementProps
 import com.migux97.simon.ui.screens.MotionProps
 import com.migux97.simon.ui.screens.layerLabel
+import com.migux97.simon.ui.screens.isPhoto
+import com.migux97.simon.ui.screens.loadPhoto
+import com.migux97.simon.data.PhotoAdjust
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -123,15 +127,41 @@ private fun HomeItem.layerLabel(): String = when (type) {
     ItemType.ELEMENT -> element?.layerLabel() ?: "Elemento"
 }
 
+/** Fotos y dibujos de la página: se pueden recortar y ajustar. */
+private fun HomeItem.photoAdjust(): PhotoAdjust? = when {
+    type == ItemType.STICKER && (stickerSource == StickerSource.IMAGE || stickerSource == StickerSource.DRAWING) -> photo
+    type == ItemType.ELEMENT && element?.isPhoto() == true -> element.photo
+    else -> null
+}
+
+/** La imagen original (sin recorte) de una foto o un dibujo de la página. */
+internal fun HomeItem.loadPhoto(): android.graphics.Bitmap? = when {
+    type == ItemType.STICKER && stickerSource == StickerSource.IMAGE -> ImageStore.load(mediaPath, 1600)
+    type == ItemType.STICKER && stickerSource == StickerSource.DRAWING -> com.migux97.simon.data.MediaLibrary.loadDrawing(mediaId, 1600)
+    type == ItemType.ELEMENT -> element?.loadPhoto()
+    else -> null
+}
+
 private object PageSource : CanvaSource<PageDoc> {
     override fun layers(doc: PageDoc) = doc.items.map {
-        CLayer(it.id, it.x, it.y, it.w, it.h, it.rotation, it.alpha, it.locked, it.hidden, it.groupId, it.layerLabel(), canDuplicate = it.type != ItemType.SYSTEM_WIDGET)
+        CLayer(
+            it.id, it.x, it.y, it.w, it.h, it.rotation, it.alpha, it.locked, it.hidden, it.groupId, it.layerLabel(),
+            canDuplicate = it.type != ItemType.SYSTEM_WIDGET, flipX = it.flipX, flipY = it.flipY, photo = it.photoAdjust()
+        )
     }
 
     override fun applyLayers(doc: PageDoc, changed: List<CLayer>): PageDoc {
         val byId = changed.associateBy { it.id }
         return doc.copy(items = doc.items.map { i ->
-            byId[i.id]?.let { l -> i.copy(x = l.x, y = l.y, w = l.w, h = l.h, rotation = l.rotation, alpha = l.alpha, locked = l.locked, hidden = l.hidden, groupId = l.groupId) } ?: i
+            byId[i.id]?.let { l ->
+                val moved = i.copy(x = l.x, y = l.y, w = l.w, h = l.h, rotation = l.rotation, alpha = l.alpha, locked = l.locked, hidden = l.hidden, groupId = l.groupId, flipX = l.flipX, flipY = l.flipY)
+                val p = l.photo
+                when {
+                    p == null -> moved
+                    i.type == ItemType.ELEMENT -> moved.copy(element = i.element?.copy(photo = p))
+                    else -> moved.copy(photo = p)
+                }
+            } ?: i
         })
     }
 
@@ -341,6 +371,7 @@ fun CanvaPageEditor(
         tools = tools,
         hint = "Tocá algo para elegirlo · arrastrá para moverlo · usá las manijas para agrandar y girar · mantené presionado para elegir varios",
         hintKey = "canva_page",
+        loadPhoto = { id -> state.doc.items.firstOrNull { it.id == id }?.loadPhoto() },
         topActions = {
             IconButton(onClick = { finish() }) { Icon(Icons.Filled.Check, "Listo", tint = Color.White) }
         },
@@ -453,6 +484,7 @@ private fun PageItemsView(items: List<HomeItem>, ui: LauncherUi) {
                         .offset { IntOffset((item.x * wPx).roundToInt(), (item.y * hPx).roundToInt()) }
                         .size(with(density) { (item.w * wPx).coerceAtLeast(1f).toDp() }, with(density) { (item.h * hPx).coerceAtLeast(1f).toDp() })
                         .graphicsLayer { rotationZ = item.rotation; alpha = item.alpha }
+                        .flip(item.flipX, item.flipY)
                 ) {
                     ItemContent(item, settings, ui)
                     if (item.stickers.isNotEmpty()) StickerLayer(item.stickers, Modifier.fillMaxSize())

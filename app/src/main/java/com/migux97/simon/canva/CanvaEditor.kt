@@ -44,6 +44,9 @@ import androidx.compose.material.icons.filled.AlignVerticalCenter
 import androidx.compose.material.icons.filled.AlignVerticalTop
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Crop
+import androidx.compose.material.icons.filled.Flip
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -90,6 +93,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -97,7 +101,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.graphics.Bitmap
+import android.widget.Toast
+import androidx.compose.runtime.rememberCoroutineScope
+import com.migux97.simon.data.PhotoAdjust
 import com.migux97.simon.ui.components.HelpTip
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.migux97.simon.ui.components.LabeledSlider
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -124,6 +135,8 @@ private const val P_ALIGN = "_align"
 private const val P_ORDER = "_order"
 private const val P_ALPHA = "_alpha"
 private const val P_LAYERS = "_layers"
+private const val P_FLIP = "_flip"
+private const val P_ADJUST = "_adjust"
 
 /**
  * Editor tipo Canva. Con [fullScreen] el lienzo ocupa toda la pantalla (para
@@ -146,16 +159,21 @@ fun <S> CanvaEditor(
     onEditOutside: ((CLayer) -> Boolean)? = null,
     background: @Composable BoxScope.() -> Unit = {},
     foreground: @Composable BoxScope.() -> Unit = {},
+    /** Carga la imagen original de una foto o un dibujo (para recortar y ajustar). */
+    loadPhoto: (suspend (String) -> Bitmap?)? = null,
     content: @Composable BoxScope.() -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var cropping by remember { mutableStateOf<Pair<String, Bitmap>?>(null) }
+    var photoBitmap by remember { mutableStateOf<Pair<String, Bitmap>?>(null) }
     val prefs = remember { context.getSharedPreferences("simon_hints", Context.MODE_PRIVATE) }
     var showHint by remember { mutableStateOf(!prefs.getBoolean(hintKey, false)) }
     var canvasPx by remember { mutableStateOf(1f to 1f) }
 
     // Si la selección se vacía, se cierran los paneles que dependen de ella.
     LaunchedEffect(state.selection.isEmpty()) {
-        if (state.selection.isEmpty() && state.panel in listOf(P_EDIT, P_ALIGN, P_ORDER, P_ALPHA)) state.panel = null
+        if (state.selection.isEmpty() && state.panel in listOf(P_EDIT, P_ALIGN, P_ORDER, P_ALPHA, P_FLIP, P_ADJUST)) state.panel = null
     }
 
     BackHandler {
@@ -172,8 +190,29 @@ fun <S> CanvaEditor(
         if (editPanel != null) state.panel = P_EDIT
     }
 
+    /** Trae la foto original de la capa elegida (para recortar o para las vistas previas de los filtros). */
+    fun withPhoto(then: (String, Bitmap) -> Unit) {
+        val l = state.selected.singleOrNull()?.takeIf { it.photo != null } ?: return
+        val loader = loadPhoto ?: return
+        photoBitmap?.takeIf { it.first == l.id }?.let { then(l.id, it.second); return }
+        scope.launch {
+            val bmp = withContext(Dispatchers.IO) { loader(l.id) }
+            if (bmp == null) {
+                Toast.makeText(context, "No se pudo abrir la imagen", Toast.LENGTH_SHORT).show()
+            } else {
+                photoBitmap = l.id to bmp
+                then(l.id, bmp)
+            }
+        }
+    }
+    val photoTools = PhotoTools(
+        canPhoto = loadPhoto != null && state.selected.singleOrNull()?.photo != null,
+        onCrop = { withPhoto { id, bmp -> cropping = id to bmp } },
+        onAdjust = { withPhoto { _, _ -> state.panel = P_ADJUST } }
+    )
+
     val stage: @Composable (Modifier) -> Unit = { mod ->
-        CanvasStage(state, mod, onSize = { w, h -> canvasPx = w to h }, onEdit = { openEdit() }, background = background, foreground = foreground, content = content)
+        CanvasStage(state, mod, onSize = { w, h -> canvasPx = w to h }, onEdit = { openEdit() }, canEdit = editPanel != null || onEditOutside != null, background = background, foreground = foreground, content = content)
     }
     val topBar: @Composable () -> Unit = {
         TopBar(state, title, fullScreen, onClose, topActions)
@@ -188,9 +227,19 @@ fun <S> CanvaEditor(
     val bottom: @Composable () -> Unit = {
         Column(Modifier.fillMaxWidth().imePadding()) {
             state.panel?.let { key ->
-                PanelHost(state, key, tools, editPanel, canvasPx)
+                PanelHost(state, key, tools, editPanel, canvasPx, photoBitmap)
             }
-            BottomBar(state, tools, canEdit = editPanel != null || onEditOutside != null, onEdit = { openEdit() })
+            BottomBar(state, tools, canEdit = editPanel != null || onEditOutside != null, onEdit = { openEdit() }, photo = photoTools)
+        }
+    }
+
+    cropping?.let { (id, bmp) ->
+        val current = state.layers.firstOrNull { it.id == id }?.photo ?: PhotoAdjust()
+        CropDialog(bmp, current, onDismiss = { cropping = null }) { adj, aspect ->
+            cropping = null
+            // Una capa bloqueada (por ejemplo el fondo) no cambia de forma: solo se recorta lo que muestra.
+            val locked = state.layers.firstOrNull { it.id == id }?.locked == true
+            state.setPhoto(id, adj, if (locked) null else aspect, canvasPx.first, canvasPx.second)
         }
     }
 
@@ -228,6 +277,7 @@ private fun <S> CanvasStage(
     modifier: Modifier,
     onSize: (Float, Float) -> Unit,
     onEdit: () -> Unit,
+    canEdit: Boolean,
     background: @Composable BoxScope.() -> Unit,
     foreground: @Composable BoxScope.() -> Unit,
     content: @Composable BoxScope.() -> Unit
@@ -245,6 +295,64 @@ private fun <S> CanvasStage(
             key(l.id) { LayerHit(state, l, wPx, hPx, onEdit) }
         }
         SelectionOverlay(state, wPx, hPx)
+        FloatingMenu(state, wPx, hPx, canEdit, onEdit)
+    }
+}
+
+/**
+ * Menú chico arriba de lo elegido (como en Canva): lo más usado a mano,
+ * sin tener que buscarlo en la barra de abajo.
+ */
+@Composable
+private fun <S> FloatingMenu(state: CanvaState<S>, wPx: Float, hPx: Float, canEdit: Boolean, onEdit: () -> Unit) {
+    val sel = state.selected
+    if (sel.isEmpty() || state.inGestureState) return
+    val box = union(sel.map { it.bounds(wPx, hPx) }) ?: return
+    val density = LocalDensity.current
+    val menuH = with(density) { 46.dp.toPx() }
+    val gap = with(density) { 14.dp.toPx() }
+    var menuW by remember { mutableStateOf(0) }
+    val locked = sel.any { it.locked }
+    // Arriba de lo elegido; si no entra, abajo (dejando lugar para la manija de girar).
+    val above = box.top * hPx - gap - menuH
+    val below = box.bottom * hPx + with(density) { 56.dp.toPx() }
+    // Si lo elegido ocupa toda la pantalla (por ejemplo el fondo), el menú queda adentro, arriba.
+    val top = with(density) { 96.dp.toPx() }
+    val y = when {
+        above > top -> above
+        below + menuH < hPx - with(density) { 140.dp.toPx() } -> below
+        else -> (box.top * hPx + gap).coerceAtLeast(top)
+    }
+    val x = (box.cx * wPx - menuW / 2f).coerceIn(0f, (wPx - menuW).coerceAtLeast(0f))
+    Row(
+        Modifier
+            .offset { IntOffset(x.roundToInt(), y.roundToInt()) }
+            .onSizeChanged { menuW = it.width }
+            .shadow(6.dp, RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color.White)
+            .padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (canEdit && sel.size == 1) MenuIcon(Icons.Filled.Edit, "Editar") { onEdit() }
+        MenuIcon(Icons.Filled.ContentCopy, "Duplicar", enabled = sel.any { it.canDuplicate }) { state.duplicateSelected() }
+        MenuIcon(if (locked) Icons.Filled.LockOpen else Icons.Filled.Lock, if (locked) "Desbloquear" else "Bloquear") { state.setLocked(!locked) }
+        MenuIcon(Icons.Filled.Delete, "Borrar", tint = Color(0xFFD32F2F)) { state.deleteSelected() }
+    }
+}
+
+@Composable
+private fun MenuIcon(icon: ImageVector, label: String, enabled: Boolean = true, tint: Color = Color(0xFF2A1F45), onClick: () -> Unit) {
+    Column(
+        Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        val c = if (enabled) tint else tint.copy(alpha = 0.3f)
+        Icon(icon, label, tint = c, modifier = Modifier.size(20.dp))
+        Text(label, color = c, fontSize = 10.sp, maxLines = 1)
     }
 }
 
@@ -543,8 +651,11 @@ private fun BarItem(icon: ImageVector, label: String, active: Boolean = false, e
     }
 }
 
+/** Recortar y Ajustes, solo para fotos y dibujos. */
+class PhotoTools(val canPhoto: Boolean, val onCrop: () -> Unit, val onAdjust: () -> Unit)
+
 @Composable
-private fun <S> BottomBar(state: CanvaState<S>, tools: List<CanvaTool>, canEdit: Boolean, onEdit: () -> Unit) {
+private fun <S> BottomBar(state: CanvaState<S>, tools: List<CanvaTool>, canEdit: Boolean, onEdit: () -> Unit, photo: PhotoTools) {
     val sel = state.selected
     Surface(color = BarColor, shape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp), modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -564,16 +675,21 @@ private fun <S> BottomBar(state: CanvaState<S>, tools: List<CanvaTool>, canEdit:
                 val locked = sel.any { it.locked }
                 BarItem(Icons.Filled.Check, "Listo") { state.clearSelection(); state.panel = null }
                 if (canEdit && sel.size == 1) BarItem(Icons.Filled.Edit, "Editar", active = state.panel == P_EDIT) { onEdit() }
+                if (photo.canPhoto) {
+                    BarItem(Icons.Filled.Crop, "Recortar") { state.panel = null; photo.onCrop() }
+                    BarItem(Icons.Filled.Tune, "Ajustes", active = state.panel == P_ADJUST) { if (state.panel == P_ADJUST) state.panel = null else photo.onAdjust() }
+                }
+                BarItem(Icons.Filled.Flip, "Voltear", active = state.panel == P_FLIP, enabled = !locked) { toggle(P_FLIP) }
                 BarItem(Icons.Filled.FormatAlignCenter, "Alinear", active = state.panel == P_ALIGN, enabled = !locked) { toggle(P_ALIGN) }
                 BarItem(Icons.Filled.FlipToFront, "Orden", active = state.panel == P_ORDER) { toggle(P_ORDER) }
                 BarItem(Icons.Filled.Opacity, "Opacidad", active = state.panel == P_ALPHA) { toggle(P_ALPHA) }
                 BarItem(Icons.Filled.ContentCopy, "Duplicar", enabled = sel.any { it.canDuplicate }) { state.duplicateSelected() }
+                BarItem(Icons.Filled.Delete, "Borrar") { state.deleteSelected() }
                 BarItem(if (locked) Icons.Filled.LockOpen else Icons.Filled.Lock, if (locked) "Desbloquear" else "Bloquear") { state.setLocked(!locked) }
                 if (state.canGroup) BarItem(Icons.Filled.Workspaces, "Agrupar") { state.group() }
                 if (state.canUngroup) BarItem(Icons.Filled.Workspaces, "Desagrupar") { state.ungroup() }
                 BarItem(Icons.Filled.LibraryAddCheck, "Elegir varios", active = state.multiSelect) { state.multiSelect = !state.multiSelect }
                 BarItem(Icons.Filled.Layers, "Capas", active = state.panel == P_LAYERS) { toggle(P_LAYERS) }
-                BarItem(Icons.Filled.Delete, "Borrar") { state.deleteSelected() }
             }
         }
     }
@@ -587,7 +703,8 @@ private fun <S> PanelHost(
     key: String,
     tools: List<CanvaTool>,
     editPanel: (@Composable ColumnScope.(CLayer) -> Unit)?,
-    canvasPx: Pair<Float, Float>
+    canvasPx: Pair<Float, Float>,
+    photoBitmap: Pair<String, Bitmap>?
 ) {
     val maxH = (LocalConfiguration.current.screenHeightDp * 0.46f).dp
     val tool = tools.firstOrNull { it.key == key }
@@ -597,6 +714,8 @@ private fun <S> PanelHost(
         P_ORDER -> "Orden y giro"
         P_ALPHA -> "Opacidad"
         P_LAYERS -> "Capas"
+        P_FLIP -> "Voltear"
+        P_ADJUST -> "Ajustes de foto"
         else -> tool?.label ?: ""
     }
     Surface(
@@ -623,6 +742,16 @@ private fun <S> PanelHost(
                         }
                     }
                     P_LAYERS -> LayersPanel(state)
+                    P_FLIP -> Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+                        PanelButton(Icons.Filled.Flip, "Horizontal") { state.flip(true, wPx, hPx) }
+                        PanelButton(Icons.Filled.Flip, "Vertical", rotate = 90f) { state.flip(false, wPx, hPx) }
+                    }
+                    P_ADJUST -> state.selected.singleOrNull()?.let { l ->
+                        val adj = l.photo
+                        if (adj != null) AdjustPanel(photoBitmap?.takeIf { it.first == l.id }?.second, adj) { next, slide ->
+                            state.setPhoto(l.id, next, coalesce = slide)
+                        }
+                    }
                     else -> tool?.content?.invoke(this)
                 }
             }
@@ -631,7 +760,7 @@ private fun <S> PanelHost(
 }
 
 @Composable
-private fun PanelButton(icon: ImageVector, label: String, enabled: Boolean = true, onClick: () -> Unit) {
+private fun PanelButton(icon: ImageVector, label: String, enabled: Boolean = true, rotate: Float = 0f, onClick: () -> Unit) {
     Column(
         Modifier
             .clip(RoundedCornerShape(14.dp))
@@ -641,7 +770,7 @@ private fun PanelButton(icon: ImageVector, label: String, enabled: Boolean = tru
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         val tint = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
-        Icon(icon, null, tint = tint, modifier = Modifier.size(26.dp))
+        Icon(icon, null, tint = tint, modifier = Modifier.size(26.dp).graphicsLayer { rotationZ = rotate })
         Spacer(Modifier.size(4.dp))
         Text(label, fontSize = 12.sp, color = tint, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }

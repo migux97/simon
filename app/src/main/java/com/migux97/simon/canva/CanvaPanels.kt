@@ -39,7 +39,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.migux97.simon.custom.CustomWidgetLive
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import com.migux97.simon.data.Catalog
+import com.migux97.simon.data.Categories
+import com.migux97.simon.data.Category
+import com.migux97.simon.ui.components.CategoryHeader
+import com.migux97.simon.ui.components.CategoryTiles
 import com.migux97.simon.data.CustomWidget
 import com.migux97.simon.data.LiveConfig
 import com.migux97.simon.data.MediaLibrary
@@ -86,7 +93,7 @@ private fun BlockGrid(blocks: List<ElementBlock>, onAdd: (ElementBlock) -> Unit)
 /** Panel «Texto»: títulos, datos en vivo y combinaciones. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun TextPanel(onAdd: (ElementBlock) -> Unit) {
+fun TextPanel(showLive: Boolean = true, onAdd: (ElementBlock) -> Unit) {
     Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         CanvaPresets.textStyles.forEachIndexed { i, b ->
             Surface(
@@ -103,21 +110,37 @@ fun TextPanel(onAdd: (ElementBlock) -> Unit) {
             }
         }
     }
-    CanvaSection("Datos que se actualizan solos")
-    FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        CanvaPresets.liveTexts.forEach { b -> AssistChip(onClick = { onAdd(b) }, label = { Text(b.label) }) }
+    if (showLive) {
+        CanvaSection("Datos que se actualizan solos")
+        FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            CanvaPresets.liveTexts.forEach { b -> AssistChip(onClick = { onAdd(b) }, label = { Text(b.label) }) }
+        }
     }
     CanvaSection("Combinaciones")
     BlockGrid(CanvaPresets.textCombos, onAdd)
 }
 
-/** Formas y gráficos (batería, progreso, reloj). */
+/**
+ * Primero las categorías; al tocar una se ve lo que tiene y una flecha para
+ * volver. [key] separa el estado de cada panel.
+ */
+@Composable
+fun <T> CategoryPanel(key: String, groups: List<Pair<Category, List<T>>>, content: @Composable (List<T>) -> Unit) {
+    var openName by rememberSaveable(key) { mutableStateOf<String?>(null) }
+    val open = openName?.let { n -> groups.firstOrNull { it.first.name == n } }
+    if (open == null) {
+        CategoryTiles(groups.map { it.first to it.second.size }, onPick = { openName = it.name })
+    } else {
+        CategoryHeader(open.first, open.second.size, onBack = { openName = null }, modifier = Modifier.padding(horizontal = 4.dp))
+        content(open.second)
+    }
+}
+
+/** Formas, gráficos (batería, progreso, reloj) y stickers, por categoría. */
 @Composable
 fun ShapesAndGraphics(onAdd: (ElementBlock) -> Unit) {
-    CanvaSection("Formas")
-    BlockGrid(CanvaPresets.shapes, onAdd)
-    CanvaSection("Gráficos y relojes")
-    BlockGrid(CanvaPresets.graphics, onAdd)
+    val groups = remember { Categories.group(CanvaPresets.elements) { it.cats } }
+    CategoryPanel("elements", groups) { list -> BlockGrid(list, onAdd) }
 }
 
 @Composable
@@ -164,12 +187,18 @@ fun Hint(text: String) = Text(
     modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
 )
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun WidgetTemplateGrid(onPick: (CustomWidget) -> Unit) {
-    Hint("Tocá una para usarla. Después cambiás lo que quieras: textos, colores, tamaño.")
+    val groups = remember { Categories.group(WidgetTemplates.all) { WidgetTemplates.categoriesOf(it) } }
+    Hint("Elegí una categoría y tocá una plantilla. Después cambiás lo que quieras: textos, colores, tamaño.")
+    CategoryPanel("widget_tpl", groups) { list -> WidgetTemplateList(list, onPick) }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun WidgetTemplateList(list: List<CustomWidget>, onPick: (CustomWidget) -> Unit) {
     FlowRow(Modifier.padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        WidgetTemplates.all.forEach { t ->
+        list.forEach { t ->
             Column(Modifier.width(156.dp).clip(RoundedCornerShape(14.dp)).clickable { onPick(t) }.padding(4.dp)) {
                 Box(Modifier.fillMaxWidth().height(96.dp), contentAlignment = Alignment.Center) {
                     Box(Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)).background(Color(0x22888888)))
@@ -183,12 +212,18 @@ fun WidgetTemplateGrid(onPick: (CustomWidget) -> Unit) {
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PageTemplateGrid(lock: Boolean, onPick: (PageTemplate) -> Unit) {
-    Hint("Diseños para la pantalla completa. Tocá uno para sumarlo.")
+    val groups = remember { Categories.group(PageTemplates.all) { it.cats } }
+    Hint("Diseños para la pantalla completa. Elegí una categoría y tocá uno para sumarlo.")
+    CategoryPanel("page_tpl", groups) { list -> PageTemplateList(list, lock, onPick) }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PageTemplateList(list: List<PageTemplate>, lock: Boolean, onPick: (PageTemplate) -> Unit) {
     FlowRow(Modifier.padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        PageTemplates.all.forEach { t ->
+        list.forEach { t ->
             val preview = remember(t) { CustomWidget(id = "tpl_" + t.name, bgAlpha = 0f, corner = 0f, elements = t.elements) }
             Column(Modifier.width(96.dp).clip(RoundedCornerShape(14.dp)).clickable { onPick(t) }.padding(4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 PhoneWallpaperBackdrop(Modifier.fillMaxWidth().aspectRatio(0.46f).clip(RoundedCornerShape(12.dp)), lock = lock) {

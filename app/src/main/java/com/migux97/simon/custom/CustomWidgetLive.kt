@@ -24,6 +24,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -104,6 +105,7 @@ fun CustomWidgetLive(
                 .offset(ex, ey)
                 .size(ew.coerceAtLeast(1.dp), eh.coerceAtLeast(1.dp))
                 .motion(e.motion, e.motionSpeed, e.rotation, e.alpha)
+                .then(if (e.flipX || e.flipY) Modifier.graphicsLayer { scaleX = if (e.flipX) -1f else 1f; scaleY = if (e.flipY) -1f else 1f } else Modifier)
             if (interactive && e.action != TapAction.NONE) {
                 m = m.clickable { SystemActions.run(context, e.action, e.actionData, onOpenDrawer) }
             }

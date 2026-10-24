@@ -66,6 +66,10 @@ data class HomeItem(
     // Editor tipo Canva: capas ocultas, grupos y elementos libres (texto, formas…)
     val hidden: Boolean = false,
     val groupId: String? = null,
+    val flipX: Boolean = false,
+    val flipY: Boolean = false,
+    /** Recorte y ajustes de las fotos y los dibujos. */
+    val photo: PhotoAdjust = PhotoAdjust(),
     /** Solo para [ItemType.ELEMENT]: el elemento ocupa todo el cuadro (x = y = 0, w = h = 1). */
     val element: WElement? = null
 )
@@ -268,8 +272,44 @@ data class WElement(
     // Capa oculta en el constructor (no se dibuja)
     val hidden: Boolean = false,
     val locked: Boolean = false,
-    val groupId: String? = null
+    val groupId: String? = null,
+    val flipX: Boolean = false,
+    val flipY: Boolean = false,
+    /** Recorte y ajustes (fotos y dibujos). */
+    val photo: PhotoAdjust = PhotoAdjust()
 )
+
+@Serializable
+enum class PhotoFilter(val label: String) {
+    NONE("Original"),
+    BW("Blanco y negro"),
+    SEPIA("Sepia"),
+    WARM("Cálido"),
+    COOL("Frío"),
+    VINTAGE("Antiguo"),
+    VIVID("Vivo"),
+    FADE("Suave")
+}
+
+/** Recorte (fracciones de la imagen original) y ajustes de color. */
+@Serializable
+data class PhotoAdjust(
+    val cropL: Float = 0f,
+    val cropT: Float = 0f,
+    val cropR: Float = 1f,
+    val cropB: Float = 1f,
+    /** -1..1 */
+    val brightness: Float = 0f,
+    /** 0..2 (1 = sin cambio) */
+    val contrast: Float = 1f,
+    /** 0..2 (1 = sin cambio) */
+    val saturation: Float = 1f,
+    val filter: PhotoFilter = PhotoFilter.NONE
+) {
+    val isCropped get() = cropL > 0.001f || cropT > 0.001f || cropR < 0.999f || cropB < 0.999f
+    val hasColor get() = brightness != 0f || contrast != 1f || saturation != 1f || filter != PhotoFilter.NONE
+    val isDefault get() = !isCropped && !hasColor
+}
 
 @Serializable
 data class CustomWidget(

@@ -24,6 +24,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -34,6 +36,11 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.migux97.simon.custom.CustomWidgetLive
 import com.migux97.simon.data.Catalog
+import com.migux97.simon.data.Categories
+import com.migux97.simon.data.Category
+import com.migux97.simon.ui.components.CategoryCard
+import com.migux97.simon.ui.components.CategoryHeader
+import com.migux97.simon.ui.components.WidgetPreview
 import com.migux97.simon.data.CustomWidget
 import com.migux97.simon.data.Repository
 import com.migux97.simon.data.StudioStore
@@ -70,12 +77,17 @@ private fun onHomeLabel(count: Int) = if (count <= 1) "En inicio" else "En inici
 @Composable
 fun WidgetsScreen(nav: Nav) {
     val context = LocalContext.current
-    var kindName by rememberSaveable { mutableStateOf<String?>(null) }
+    var catName by rememberSaveable { mutableStateOf<String?>(null) }
     var sizeName by rememberSaveable { mutableStateOf<String?>(null) }
-    val kind = kindName?.let { WidgetKind.valueOf(it) }
+    val cat = catName?.let { Category.valueOf(it) }
     val size = sizeName?.let { WidgetSize.valueOf(it) }
-    val filtering = kind != null || size != null
-    val templates = remember(kind, size) { Catalog.templatesFor(kind, size) }
+    // Las plantillas por categoría (reloj, pareja…); adentro de cada una se filtra por tamaño.
+    val groups = remember { Categories.group(Catalog.widgetTemplates) { Categories.of(it) } }
+    val templates = remember(cat, size) {
+        // Primero los que son de ese tipo (en «Pareja», los widgets de pareja antes que los relojes rosas).
+        groups.firstOrNull { it.first == cat }?.second.orEmpty().filter { size == null || it.size == size }
+            .sortedByDescending { Categories.main(it) == cat }
+    }
 
     val designs by Repository.designs.collectAsStateWithLifecycle()
     val bindings by Repository.bindings.collectAsStateWithLifecycle()
@@ -94,9 +106,15 @@ fun WidgetsScreen(nav: Nav) {
         }
     }
     val placedCountByDesign = remember(placedBindings) { placedBindings.values.groupingBy { it }.eachCount() }
-    val savedFiltered = designs.filter { (kind == null || it.kind == kind) && (size == null || it.size == size) }
+    val savedFiltered = designs
 
+    // Al entrar o salir de una categoría se va a su título.
+    val grid = rememberLazyGridState()
+    LaunchedEffect(catName) {
+        if (catName != null) grid.scrollToItem((2 + placed.size).coerceAtMost((grid.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)))
+    }
     LazyVerticalGrid(
+        state = grid,
         columns = GridCells.Fixed(2),
         contentPadding = PaddingValues(16.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -151,37 +169,8 @@ fun WidgetsScreen(nav: Nav) {
             }
         }
 
-        // Filtros (valen para tus diseños y para las plantillas)
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            Column(Modifier.padding(top = 10.dp)) {
-                Text("Filtrar por tipo y tamaño", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(start = 4.dp, bottom = 4.dp))
-                ChoiceChips(
-                    options = listOf<WidgetKind?>(null) + WidgetKind.entries,
-                    selected = kind,
-                    label = { it?.label ?: "Todos los tipos" },
-                    onSelect = { kindName = it?.name }
-                )
-                ChoiceChips(
-                    options = listOf<WidgetSize?>(null) + WidgetSize.entries,
-                    selected = size,
-                    label = { it?.let { s -> "${s.label} ${s.cellsW}×${s.cellsH}" } ?: "Todos los tamaños" },
-                    onSelect = { sizeName = it?.name },
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-            }
-        }
-
-        if (filtering && savedFiltered.isEmpty() && templates.isEmpty()) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                Column(Modifier.fillMaxWidth().padding(vertical = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("No hay diseños con ese tipo y tamaño", style = MaterialTheme.typography.titleMedium)
-                    OutlinedButton(onClick = { kindName = null; sizeName = null }, modifier = Modifier.padding(top = 8.dp)) { Text("Quitar filtros") }
-                }
-            }
-        }
-
         // 2) Diseños guardados
-        if (!filtering || savedFiltered.isNotEmpty()) {
+        if (cat == null) {
             sectionTitle(
                 "Tus diseños guardados",
                 if (designs.isEmpty()) "Cuando guardes un diseño lo vas a encontrar acá." else null
@@ -199,9 +188,29 @@ fun WidgetsScreen(nav: Nav) {
             }
         }
 
-        // 3) Plantillas
-        if (templates.isNotEmpty()) {
-            sectionTitle("Plantillas", "${templates.size} diseños listos para personalizar")
+        // 3) Plantillas por categoría
+        if (cat == null) {
+            sectionTitle("Plantillas por categoría", "${Catalog.widgetTemplates.size} diseños listos. Elegí una categoría.")
+            items(groups, key = { "c_" + it.first.name }) { (c, list) ->
+                CategoryCard(c, list.size, onClick = { catName = c.name; sizeName = null }) {
+                    // La muestra es de ese tipo (un reloj en «Reloj», un widget de pareja en «Pareja»…).
+                    val small = list.filter { it.size == WidgetSize.SMALL }
+                    val sample = small.firstOrNull { Categories.main(it) == c } ?: small.firstOrNull() ?: list.first()
+                    WidgetPreview(sample, Modifier.align(Alignment.TopCenter).padding(start = 22.dp, end = 22.dp, top = 12.dp, bottom = 52.dp).fillMaxWidth())
+                }
+            }
+        } else {
+            item(span = { GridItemSpan(maxLineSpan) }, key = "cat_header") {
+                Column {
+                    CategoryHeader(cat, templates.size, onBack = { catName = null; sizeName = null })
+                    ChoiceChips(
+                        options = listOf<WidgetSize?>(null) + WidgetSize.entries,
+                        selected = size,
+                        label = { it?.let { s -> "${s.label} ${s.cellsW}×${s.cellsH}" } ?: "Todos los tamaños" },
+                        onSelect = { sizeName = it?.name }
+                    )
+                }
+            }
             items(templates, key = { "t_" + it.id }, span = { GridItemSpan(if (it.size == WidgetSize.SMALL) 1 else 2) }) { d ->
                 Column(Modifier.clickable { nav.editor(d.id) }) {
                     WidgetOnBackdrop(d, Modifier.fillMaxWidth())

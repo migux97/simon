@@ -136,9 +136,12 @@ fun LauncherBackgroundLayer(bg: LauncherBackground, pager: PagerState) {
 }
 
 @Composable
-fun BitmapFill(path: String?, drawingId: String?, modifier: Modifier, crop: Boolean = true) {
-    val bmp by produceState<Bitmap?>(null, path, drawingId) {
-        value = withContext(Dispatchers.IO) { if (drawingId != null) MediaLibrary.loadDrawing(drawingId, 1600) else ImageStore.load(path, 1600) }
+fun BitmapFill(path: String?, drawingId: String?, modifier: Modifier, crop: Boolean = true, photo: com.migux97.simon.data.PhotoAdjust = com.migux97.simon.data.PhotoAdjust()) {
+    val bmp by produceState<Bitmap?>(null, path, drawingId, photo) {
+        value = withContext(Dispatchers.IO) {
+            val raw = if (drawingId != null) MediaLibrary.loadDrawing(drawingId, 1600) else ImageStore.load(path, 1600)
+            raw?.let { com.migux97.simon.custom.PhotoFx.process(it, photo, drawingId ?: path ?: "") }
+        }
     }
     bmp?.let { Image(it.asImageBitmap(), null, modifier, contentScale = if (crop) ContentScale.Crop else ContentScale.Fit) }
 }
@@ -172,6 +175,10 @@ fun AnimatedFrames(animationId: String?, modifier: Modifier, crop: Boolean = fal
 }
 
 // ---------------------------------------------------------------- página
+
+/** Espeja un elemento (Voltear). */
+fun Modifier.flip(x: Boolean, y: Boolean): Modifier =
+    if (!x && !y) this else graphicsLayer { scaleX = if (x) -1f else 1f; scaleY = if (y) -1f else 1f }
 
 @Composable
 fun PageCanvas(page: Int, items: List<HomeItem>, settings: LauncherSettings, ui: LauncherUi) {
@@ -217,6 +224,7 @@ private fun FreeItem(item: HomeItem, wPx: Float, hPx: Float, settings: LauncherS
             Modifier
                 .fillMaxSize()
                 .motion(if (ui.editMode) Motion.NONE else motion, item.motionSpeed, live.rotation, live.alpha)
+                .flip(item.flipX, item.flipY)
                 .then(if (selected) Modifier.border(2.dp, Color.White, RoundedCornerShape(10.dp)) else Modifier)
         ) {
             ItemContent(item, settings, ui)
@@ -345,8 +353,8 @@ internal fun ItemContent(item: HomeItem, settings: LauncherSettings, ui: Launche
             modifier = Modifier.fillMaxSize()
         )
         ItemType.STICKER -> when (item.stickerSource) {
-            StickerSource.IMAGE -> BitmapFill(item.mediaPath, null, Modifier.fillMaxSize(), crop = false)
-            StickerSource.DRAWING -> BitmapFill(null, item.mediaId, Modifier.fillMaxSize(), crop = false)
+            StickerSource.IMAGE -> BitmapFill(item.mediaPath, null, Modifier.fillMaxSize(), crop = false, photo = item.photo)
+            StickerSource.DRAWING -> BitmapFill(null, item.mediaId, Modifier.fillMaxSize(), crop = false, photo = item.photo)
             StickerSource.ANIMATION -> AnimatedFrames(item.mediaId, Modifier.fillMaxSize())
             StickerSource.VIDEO -> item.mediaPath?.takeIf { File(it).exists() }?.let {
                 if (StudioStore.perf.allowVideo && com.migux97.simon.ui.components.LocalAnimationsActive.current) LoopingVideo(it, Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp)))

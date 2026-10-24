@@ -27,6 +27,7 @@ import androidx.navigation.compose.rememberNavController
 import com.migux97.simon.draw.AnimationScreen
 import com.migux97.simon.draw.DrawingScreen
 import com.migux97.simon.ui.screens.BuilderScreen
+import com.migux97.simon.ui.screens.WallpaperEditScreen
 import com.migux97.simon.ui.screens.CreateScreen
 import com.migux97.simon.ui.screens.EffectsScreen
 import com.migux97.simon.ui.screens.HomeScreen
@@ -123,6 +124,7 @@ fun SimonRoot(editDesignId: String?, route: String?, onEditConsumed: () -> Unit)
             composable("icons") { IconsScreen(nav, themeId = null) }
             composable("create") { CreateScreen(nav) }
             composable("builder/{id}") { BuilderScreen(nav, it.arguments?.getString("id") ?: "new") }
+            composable("wallEdit/{which}") { WallpaperEditScreen(nav, it.arguments?.getString("which") ?: "home") }
             composable("drawing/{id}") { DrawingScreen(nav, it.arguments?.getString("id") ?: "new") }
             composable("animation/{id}") { AnimationScreen(nav, it.arguments?.getString("id") ?: "new") }
             composable("effects") { EffectsScreen(nav) }

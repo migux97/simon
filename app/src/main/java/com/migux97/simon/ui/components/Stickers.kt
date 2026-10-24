@@ -10,6 +10,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -82,6 +84,7 @@ fun StickerPickerDialog(onDismiss: () -> Unit, onPick: (StickerInfo) -> Unit) {
     val drawings by StudioStore.drawingsFlow.collectAsStateWithLifecycle()
     val animations by StudioStore.animationsFlow.collectAsStateWithLifecycle()
     var tab by remember { mutableIntStateOf(if (mine.isEmpty()) 1 else 0) }
+    var stickerCat by remember { mutableStateOf<String?>(null) }
     // Creador de stickers prediseñados con colores propios
     var shape by remember { mutableStateOf(BuiltinSticker.HEART) }
     var c1 by remember { mutableIntStateOf(0xFFFF4F81.toInt()) }
@@ -111,7 +114,16 @@ fun StickerPickerDialog(onDismiss: () -> Unit, onPick: (StickerInfo) -> Unit) {
                 }
                 when (tab) {
                     0 -> StickerGrid(mine, onPick, emptyText = "Todavía no tenés stickers propios. Crealos en «Crear».")
-                    1 -> StickerGrid(StickerCatalog.builtins, onPick)
+                    1 -> {
+                        val groups = remember { com.migux97.simon.data.Categories.group(StickerCatalog.builtins) { com.migux97.simon.data.Categories.of(it) } }
+                        val open = stickerCat?.let { n -> groups.firstOrNull { it.first.name == n } }
+                        if (open == null) Column(Modifier.padding(top = 10.dp).verticalScroll(rememberScrollState())) {
+                            CategoryTiles(groups.map { it.first to it.second.size }, onPick = { stickerCat = it.name })
+                        } else Column {
+                            CategoryHeader(open.first, open.second.size, onBack = { stickerCat = null })
+                            StickerGrid(open.second, onPick)
+                        }
+                    }
                     else -> Column(Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilledTonalButton(onClick = { photo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, modifier = Modifier.fillMaxWidth()) {
                             Text("Desde una foto (PNG sin fondo queda genial)")

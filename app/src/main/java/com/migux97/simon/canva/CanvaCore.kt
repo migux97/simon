@@ -4,6 +4,7 @@ import android.os.SystemClock
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.migux97.simon.data.PhotoAdjust
 import com.migux97.simon.data.newId
 import kotlin.math.abs
 import kotlin.math.cos
@@ -27,7 +28,11 @@ data class CLayer(
     val hidden: Boolean = false,
     val groupId: String? = null,
     val label: String = "",
-    val canDuplicate: Boolean = true
+    val canDuplicate: Boolean = true,
+    val flipX: Boolean = false,
+    val flipY: Boolean = false,
+    /** Solo fotos y dibujos: recorte y ajustes. Null si no se puede recortar. */
+    val photo: PhotoAdjust? = null
 )
 
 /** Rectángulo en fracciones del lienzo. */
@@ -117,6 +122,9 @@ class CanvaState<S>(initial: S, val source: CanvaSource<S>, private val onCommit
     private var lastPush = 0L
     private var gestureStart: S? = null
     val inGesture get() = gestureStart != null
+    /** Igual que [inGesture] pero observable (para esconder el menú mientras se arrastra). */
+    var inGestureState by mutableStateOf(false)
+        private set
 
     val layers: List<CLayer> get() = source.layers(doc)
     val selected: List<CLayer> get() = layers.filter { it.id in selection }
@@ -156,11 +164,12 @@ class CanvaState<S>(initial: S, val source: CanvaSource<S>, private val onCommit
     fun updateLayers(changed: List<CLayer>, coalesce: Boolean = false) = commit(source.applyLayers(doc, changed), coalesce)
 
     // ---- Gestos: mientras se arrastra no se guarda; al soltar queda un solo paso.
-    fun beginGesture() { if (gestureStart == null) gestureStart = doc }
+    fun beginGesture() { if (gestureStart == null) { gestureStart = doc; inGestureState = true } }
     fun gesture(next: S) { doc = next }
     fun endGesture() {
         val start = gestureStart ?: return
         gestureStart = null
+        inGestureState = false
         guides = emptyList()
         if (start != doc) {
             push(start)
@@ -269,6 +278,30 @@ class CanvaState<S>(initial: S, val source: CanvaSource<S>, private val onCommit
     fun setAlpha(alpha: Float) = updateLayers(selected.map { it.copy(alpha = alpha) }, coalesce = true)
 
     fun resetRotation() = updateLayers(selected.filterNot { it.locked }.map { it.copy(rotation = 0f) })
+
+    /** Espeja lo elegido. Con varias capas, también se espejan sus posiciones dentro del conjunto. */
+    fun flip(horizontal: Boolean, wPx: Float, hPx: Float) {
+        val sel = selected.filterNot { it.locked }
+        if (sel.isEmpty()) return
+        val box = union(sel.map { it.bounds(wPx, hPx) }) ?: return
+        updateLayers(sel.map { l ->
+            if (horizontal) l.copy(flipX = !l.flipX, rotation = -l.rotation, x = if (sel.size > 1) box.left + box.right - l.x - l.w else l.x)
+            else l.copy(flipY = !l.flipY, rotation = -l.rotation, y = if (sel.size > 1) box.top + box.bottom - l.y - l.h else l.y)
+        })
+    }
+
+    /** Cambia el recorte o los ajustes de una foto. Si cambia la forma del recorte, la capa toma esa forma. */
+    fun setPhoto(id: String, adjust: PhotoAdjust, newAspect: Float? = null, wPx: Float = 1f, hPx: Float = 1f, coalesce: Boolean = false) {
+        val l = layers.firstOrNull { it.id == id } ?: return
+        var next = l.copy(photo = adjust)
+        if (newAspect != null && newAspect > 0f) {
+            // Se mantiene el ancho y el centro; el alto sale de la forma del recorte.
+            val cy = l.y + l.h / 2f
+            val h = (l.w * wPx / newAspect) / hPx
+            next = next.copy(h = h, y = cy - h / 2f)
+        }
+        updateLayers(listOf(next), coalesce)
+    }
 
     // ---- Orden (de atrás hacia adelante)
 

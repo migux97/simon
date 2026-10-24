@@ -56,6 +56,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -74,6 +76,10 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.migux97.simon.data.AppliedWallpaper
 import com.migux97.simon.data.Catalog
+import com.migux97.simon.data.Categories
+import com.migux97.simon.data.Category
+import com.migux97.simon.ui.components.CategoryCard
+import com.migux97.simon.ui.components.CategoryHeader
 import com.migux97.simon.data.FontStyle
 import com.migux97.simon.data.ImageStore
 import com.migux97.simon.data.LiveConfig
@@ -154,6 +160,10 @@ fun WallpapersScreen(nav: Nav) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    var catName by rememberSaveable { mutableStateOf<String?>(null) }
+    val cat = catName?.let { Category.valueOf(it) }
+    val liveGroups = remember { Categories.group(Catalog.liveWallpapers) { Categories.of(it) } }
+    val staticGroups = remember { Categories.group(Catalog.staticWallpapers) { Categories.of(it) } }
     val saved by Repository.savedLive.collectAsStateWithLifecycle()
     val savedStatic by Repository.savedStatic.collectAsStateWithLifecycle()
     val photos by Repository.appliedPhotos.collectAsStateWithLifecycle()
@@ -196,13 +206,25 @@ fun WallpapersScreen(nav: Nav) {
             Text("Fondos", style = MaterialTheme.typography.headlineLarge)
             Text("Animados, estáticos o con tus fotos y videos", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        // Al entrar a una categoría se va a las pestañas (justo arriba de lo que tiene).
+        val grid = rememberLazyGridState()
+        LaunchedEffect(catName) { if (catName != null) grid.scrollToItem(2) }
         LazyVerticalGrid(
+            state = grid,
             columns = GridCells.Fixed(3),
             contentPadding = PaddingValues(14.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.fillMaxSize()
         ) {
+            item(span = { GridItemSpan(maxLineSpan) }, key = "real") {
+                com.migux97.simon.ui.components.RealWallpapersCard(
+                    liveOnHome = if (liveActive) live else null,
+                    onEditHome = { nav.go("wallEdit/home") },
+                    onEditLock = { nav.go("wallEdit/lock") },
+                    onEditLive = { cfg -> nav.live(cfg.id) }
+                )
+            }
             item(span = { GridItemSpan(maxLineSpan) }, key = "current") {
                 CurrentWallpaperCard(
                     live = if (liveActive) live else null,
@@ -218,7 +240,7 @@ fun WallpapersScreen(nav: Nav) {
             }
             item(span = { GridItemSpan(maxLineSpan) }, key = "tabs") {
                 TabRow(selectedTabIndex = tab, containerColor = MaterialTheme.colorScheme.background) {
-                    listOf("Animados", "Estáticos", "Míos").forEachIndexed { i, t -> Tab(tab == i, { tab = i }, text = { Text(t) }) }
+                    listOf("Animados", "Estáticos", "Míos").forEachIndexed { i, t -> Tab(tab == i, { tab = i; catName = null }, text = { Text(t) }) }
                 }
             }
             when (tab) {
@@ -228,16 +250,36 @@ fun WallpapersScreen(nav: Nav) {
                             videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
                         }
                     }
-                    items(Catalog.liveWallpapers, key = { "c_" + it.id }) { lv ->
-                        LiveTile(lv, if (liveActive && live?.id == lv.id) PUT_NOW else null) { nav.live(lv.id) }
+                    if (cat == null) {
+                        items(liveGroups, key = { "lc_" + it.first.name }) { (c, list) ->
+                            CategoryCard(c, list.size, previewAspect = 9f / 16f, onClick = { catName = c.name }) {
+                                SceneThumb(list.first(), Modifier.fillMaxSize())
+                            }
+                        }
+                    } else {
+                        val list = liveGroups.firstOrNull { it.first == cat }?.second.orEmpty()
+                        item(span = { GridItemSpan(maxLineSpan) }, key = "lh") { CategoryHeader(cat, list.size, onBack = { catName = null }) }
+                        items(list, key = { "c_" + it.id }) { lv ->
+                            LiveTile(lv, if (liveActive && live?.id == lv.id) PUT_NOW else null) { nav.live(lv.id) }
+                        }
                     }
                 }
                 1 -> {
                     item {
                         ActionTile("Usar mi foto", Icons.Filled.AddPhotoAlternate) { pickPhoto() }
                     }
-                    items(Catalog.staticWallpapers, key = { "s_" + it.id }) { sw ->
-                        StaticTile(sw, if (staticStill && current?.staticWallpaper?.id == sw.id) PUT_NOW else null) { nav.static(sw.id) }
+                    if (cat == null) {
+                        items(staticGroups, key = { "sc_" + it.first.name }) { (c, list) ->
+                            CategoryCard(c, list.size, previewAspect = 9f / 16f, onClick = { catName = c.name }) {
+                                StaticThumb(list.first(), Modifier.fillMaxSize())
+                            }
+                        }
+                    } else {
+                        val list = staticGroups.firstOrNull { it.first == cat }?.second.orEmpty()
+                        item(span = { GridItemSpan(maxLineSpan) }, key = "sh") { CategoryHeader(cat, list.size, onBack = { catName = null }) }
+                        items(list, key = { "s_" + it.id }) { sw ->
+                            StaticTile(sw, if (staticStill && current?.staticWallpaper?.id == sw.id) PUT_NOW else null) { nav.static(sw.id) }
+                        }
                     }
                 }
                 else -> {

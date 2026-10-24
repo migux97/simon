@@ -35,6 +35,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import com.migux97.simon.ui.components.ChoiceChips
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -142,8 +145,19 @@ fun HomeScreen(nav: Nav) {
         }
         item { SectionHeader("Temas completos") }
         item {
+            var themeCat by rememberSaveable { mutableStateOf<String?>(null) }
+            val groups = remember { com.migux97.simon.data.Categories.group(Catalog.themes) { com.migux97.simon.data.Categories.of(it) } }
+            val shown = themeCat?.let { c -> groups.firstOrNull { it.first.name == c }?.second } ?: Catalog.themes
+            // Todas las categorías arriba; tocás una y la fila muestra solo esos temas.
+            ChoiceChips(
+                options = listOf<com.migux97.simon.data.Category?>(null) + groups.map { it.first },
+                selected = themeCat?.let { com.migux97.simon.data.Category.valueOf(it) },
+                label = { it?.let { c -> "${c.emoji} ${c.label}" } ?: "Todos" },
+                onSelect = { themeCat = it?.name },
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
             LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                items(Catalog.themes, key = { it.id }) { theme ->
+                items(shown, key = { it.id }) { theme ->
                     ThemeCard(theme, applied == theme.id) { nav.theme(theme.id) }
                 }
             }
@@ -335,7 +349,7 @@ private fun MyScreenNowCard(nav: Nav) {
                 .aspectRatio(9f / 18f)
                 .clip(RoundedCornerShape(14.dp))
                 .background(Color.Black)
-                .clickable { nav.tab("wallpapers") }
+                .clickable { if (activeLive != null) nav.live(activeLive.id) else nav.go("wallEdit/home") }
         ) {
             if (activeLive != null) {
                 if (activeLive.scene == SceneType.VIDEO) {
@@ -344,13 +358,13 @@ private fun MyScreenNowCard(nav: Nav) {
                     SceneThumb(activeLive, Modifier.fillMaxSize())
                 }
             } else {
-                // Los colores reales de tu fondo (se vuelven a leer al volver a la app).
-                key(resumeTick) { PhoneWallpaperBackdrop(Modifier.fillMaxSize()) }
+                // Tu fondo real (con permiso) o sus colores; se vuelve a leer al volver a la app.
+                com.migux97.simon.ui.components.RealWallpaperThumb(false, Modifier.fillMaxSize(), resumeTick)
             }
         }
         Column(Modifier.weight(1f).padding(start = 12.dp)) {
             Text("Tu pantalla ahora", style = MaterialTheme.typography.titleMedium)
-            ScreenNowLine("Fondo", wallpaperText) { nav.tab("wallpapers") }
+            ScreenNowLine("Fondo", wallpaperText) { if (activeLive != null) nav.live(activeLive.id) else nav.go("wallEdit/home") }
             ScreenNowLine("Tema", themeName ?: "Ninguno aplicado", onEditTheme)
             ScreenNowLine(
                 "Widgets",

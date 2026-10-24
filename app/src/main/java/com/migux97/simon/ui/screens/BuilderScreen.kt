@@ -187,15 +187,23 @@ internal fun builderStarter(kind: Int): CustomWidget = when (kind) {
 }
 
 /** Cómo ve el editor tipo Canva a los elementos de un widget creado. */
-private object WidgetSource : CanvaSource<CustomWidget> {
+internal object WidgetSource : CanvaSource<CustomWidget> {
     override fun layers(doc: CustomWidget) = doc.elements.map {
-        CLayer(it.id, it.x, it.y, it.w, it.h, it.rotation, it.alpha, it.locked, it.hidden, it.groupId, it.layerLabel())
+        CLayer(
+            it.id, it.x, it.y, it.w, it.h, it.rotation, it.alpha, it.locked, it.hidden, it.groupId, it.layerLabel(),
+            flipX = it.flipX, flipY = it.flipY, photo = if (it.isPhoto()) it.photo else null
+        )
     }
 
     override fun applyLayers(doc: CustomWidget, changed: List<CLayer>): CustomWidget {
         val byId = changed.associateBy { it.id }
         return doc.copy(elements = doc.elements.map { e ->
-            byId[e.id]?.let { l -> e.copy(x = l.x, y = l.y, w = l.w, h = l.h, rotation = l.rotation, alpha = l.alpha, locked = l.locked, hidden = l.hidden, groupId = l.groupId) } ?: e
+            byId[e.id]?.let { l ->
+                e.copy(
+                    x = l.x, y = l.y, w = l.w, h = l.h, rotation = l.rotation, alpha = l.alpha, locked = l.locked, hidden = l.hidden, groupId = l.groupId,
+                    flipX = l.flipX, flipY = l.flipY, photo = l.photo ?: e.photo
+                )
+            } ?: e
         })
     }
 
@@ -212,6 +220,16 @@ private object WidgetSource : CanvaSource<CustomWidget> {
             .map { it.copy(id = newId(), x = it.x + 0.04f, y = it.y + 0.04f) }
         return doc.copy(elements = doc.elements + copies) to copies.map { it.id }
     }
+}
+
+/** Fotos y dibujos: se pueden recortar y ajustar. */
+internal fun WElement.isPhoto() = type == ElementType.IMAGE || type == ElementType.DRAWING
+
+/** La imagen original (sin recorte) de una foto o un dibujo, para el recorte. */
+internal fun WElement.loadPhoto(): android.graphics.Bitmap? = when (type) {
+    ElementType.IMAGE -> ImageStore.load(mediaPath, 1600)
+    ElementType.DRAWING -> MediaLibrary.loadDrawing(mediaId, 1600)
+    else -> null
 }
 
 /** Nombre de la capa en el panel «Capas». */
@@ -336,6 +354,7 @@ fun BuilderScreen(nav: Nav, widgetId: String) {
         tools = tools,
         hint = "Tocá algo para elegirlo · arrastrá para moverlo · usá las manijas para agrandar y girar · mantené presionado para elegir varios",
         hintKey = "canva_widget",
+        loadPhoto = { id -> state.doc.elements.firstOrNull { it.id == id }?.loadPhoto() },
         topActions = {
             TextButton(onClick = { save(); Toast.makeText(context, "Widget guardado", Toast.LENGTH_SHORT).show() }) { Text("Guardar", color = Color.White) }
             Box {

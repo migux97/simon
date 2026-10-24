@@ -35,6 +35,17 @@ object ImageStore {
         }
     }
 
+    /** Guarda una imagen ya armada (por ejemplo tu fondo actual) y devuelve su ruta. */
+    fun saveBitmap(context: Context, bmp: Bitmap, png: Boolean = false): String? {
+        return try {
+            val file = File(dir(context, "images"), "${newId()}.${if (png) "png" else "jpg"}")
+            FileOutputStream(file).use { bmp.compress(if (png) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, 92, it) }
+            file.absolutePath
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     /** Copia un video a la carpeta privada de la app. */
     fun importVideo(context: Context, uri: Uri): String? {
         return try {
